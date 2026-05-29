@@ -95,6 +95,28 @@ const TokenStore = {
     getAiModel(providerId) {
         return store.get(`ai.${providerId}.model`) || null;
     },
+
+    // Per-connector configuration (instance URLs, etc.). Needed because the
+    // packaged installer can't read a .env file — each user has their own
+    // ServiceNow / Confluence instance and must enter it in Settings.
+    saveSourceConfig(source, config) {
+        if (!source || !config) return;
+        store.set(`config.${source}`, config);
+        logger.info('Phase 2', `Saved config for ${source}`);
+    },
+
+    getSourceConfig(source) {
+        return store.get(`config.${source}`) || null;
+    },
+
+    getSourceUrl(source) {
+        const cfg = store.get(`config.${source}`) || {};
+        return cfg.baseUrl || null;
+    },
+
+    clearSourceConfig(source) {
+        store.delete(`config.${source}`);
+    },
 };
 
 module.exports = TokenStore;

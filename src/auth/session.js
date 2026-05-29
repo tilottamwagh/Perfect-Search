@@ -152,17 +152,56 @@ async function loginSlack() {
       })();`
         );
 
+        // Slack's modern web client doesn't reliably expose window.boot_data.
+        // Try every known source: URL path (/client/{TEAMID}/...), TS.boot_data,
+        // localStorage's localConfig_v2, and finally legacy boot_data globals.
         const slackIdentity = await extractPageValue(
             win,
             `(function () {
-        const boot = window.boot_data || window.__BOOT_DATA__ || {};
-        return {
-          userId: boot.user_id || boot.user?.id || null,
-          teamId: boot.team_id || boot.team?.id || null
-        };
+        try {
+          // 1. URL path is the most reliable post-login source.
+          var urlMatch = (location.pathname || '').match(/\\/client\\/([A-Z0-9]+)/);
+          var teamFromUrl = urlMatch ? urlMatch[1] : null;
+
+          // 2. Modern TS.boot_data (set after the client mounts).
+          var tsBoot = (window.TS && window.TS.boot_data) || {};
+
+          // 3. Legacy boot_data globals.
+          var legacy = window.boot_data || window.__BOOT_DATA__ || {};
+
+          // 4. localStorage state — survives reloads, has team metadata.
+          var lcTeamId = null, lcUserId = null;
+          try {
+            var raw = localStorage.getItem('localConfig_v2');
+            if (raw) {
+              var parsed = JSON.parse(raw);
+              var teams = parsed && parsed.teams ? parsed.teams : null;
+              if (teams) {
+                var ids = Object.keys(teams);
+                if (ids.length > 0) {
+                  lcTeamId = ids[0];
+                  lcUserId = teams[ids[0]].user_id || null;
+                }
+              }
+            }
+          } catch (_) {}
+
+          return {
+            teamId: teamFromUrl || tsBoot.team_id || (tsBoot.team && tsBoot.team.id) || legacy.team_id || (legacy.team && legacy.team.id) || lcTeamId || null,
+            userId: tsBoot.user_id || (tsBoot.user && tsBoot.user.id) || legacy.user_id || (legacy.user && legacy.user.id) || lcUserId || null,
+          };
+        } catch (e) {
+          return { teamId: null, userId: null, error: String(e) };
+        }
       })();`,
-            {}
+            { teamId: null, userId: null }
         );
+
+        if (!slackIdentity?.teamId) {
+            logger.warn('Phase 2', 'Slack team ID could not be extracted — search will fail until user re-logs in to their workspace.');
+        } else {
+            logger.info('Phase 2', `Slack team ID captured: ${slackIdentity.teamId}`);
+        }
 
         return finalizeLogin({
             source: 'slack',
@@ -189,7 +228,7 @@ async function loginSlack() {
 
 async function loginConfluence() {
     logger.info('Phase 2', 'Opening Confluence SSO window');
-    const baseUrl = process.env.CONFLUENCE_BASE_URL || 'https://your-org.atlassian.net';
+    const baseUrl = tokenStore.getSourceUrl('confluence') || process.env.CONFLUENCE_BASE_URL || 'https://your-org.atlassian.net';
     const win = openSSOWindow('confluence', 'Confluence Login', `${baseUrl}/wiki`);
 
     try {
@@ -230,7 +269,14 @@ async function loginConfluence() {
 
 async function loginServiceNow() {
     logger.info('Phase 2', 'Opening ServiceNow SSO window');
-    const baseUrl = process.env.SERVICENOW_BASE_URL || 'https://your-instance.service-now.com';
+    // Priority: user-saved Settings URL > env var > placeholder. The packaged
+    // installer has no .env, so the Settings entry is the real source of
+    // truth for end users.
+    const userUrl = tokenStore.getSourceUrl('servicenow');
+    const baseUrl = userUrl || process.env.SERVICENOW_BASE_URL || 'https://your-instance.service-now.com';
+    if (!userUrl && !process.env.SERVICENOW_BASE_URL) {
+        throw new Error('ServiceNow instance URL not configured. Open Settings → ServiceNow URL and enter your instance (e.g. https://yourcompany.service-now.com).');
+    }
     const win = openSSOWindow('servicenow', 'ServiceNow Login', baseUrl);
 
     try {
@@ -275,7 +321,7 @@ async function loginServiceNow() {
 // final landing URL after SSO completes.
 async function loginAtlassian() {
     logger.info('Phase 2', 'Opening Atlassian SSO window');
-    const baseUrl = process.env.ATLASSIAN_BASE_URL || 'https://home.atlassian.com';
+    const baseUrl = tokenStore.getSourceUrl('atlassian') || process.env.ATLASSIAN_BASE_URL || 'https://home.atlassian.com';
     const win = openSSOWindow('atlassian', 'Atlassian Login', baseUrl);
 
     try {
@@ -377,7 +423,7 @@ async function waitForUrlOnDomain(win, targetDomain, requiredStableSeconds = 5, 
 
 async function loginBox() {
     logger.info('Phase 2', 'Opening Box SSO window');
-    const baseUrl = process.env.BOX_BASE_URL || 'https://ellucian.app.box.com';
+    const baseUrl = tokenStore.getSourceUrl('box') || process.env.BOX_BASE_URL || 'https://ellucian.app.box.com';
     const win = openSSOWindow('box', 'Box Login', `${baseUrl}/folder/0`);
 
     try {
@@ -414,7 +460,7 @@ async function loginBox() {
 // cookie on the unified atlassian.com domain.
 async function loginJira() {
     logger.info('Phase 2', 'Opening Jira SSO window');
-    const baseUrl = process.env.JIRA_BASE_URL || 'https://ellucian.atlassian.net';
+    const baseUrl = tokenStore.getSourceUrl('jira') || process.env.JIRA_BASE_URL || 'https://ellucian.atlassian.net';
     const url = `${baseUrl}/jira/projects?page=1&sortKey=name&sortOrder=ASC`;
     const win = openSSOWindow('jira', 'Jira Login', url);
 

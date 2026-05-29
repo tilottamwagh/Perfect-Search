@@ -21,6 +21,12 @@ contextBridge.exposeInMainWorld('perfectsearch', {
     },
     reindexWebsite: () => ipcRenderer.invoke('website:reindex'),
 
+    // Per-connector instance URLs (ServiceNow / Confluence / etc.). Required
+    // because the packaged installer has no .env file.
+    getSourceConfig: (source) => ipcRenderer.invoke('source:getConfig', source),
+    saveSourceConfig: (source, config) => ipcRenderer.invoke('source:saveConfig', source, config),
+    listSourceConfigs: () => ipcRenderer.invoke('source:listConfigs'),
+
     // AI
     getAiProviders: () => ipcRenderer.invoke('ai:providers'),
     saveAiKey: (providerId, apiKey, modelId) => ipcRenderer.invoke('ai:saveKey', providerId, apiKey, modelId),

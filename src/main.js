@@ -214,6 +214,53 @@ ipcMain.handle('auth:logout', async (_event, source) => {
   return { success: true };
 });
 
+// ---------- Per-connector settings (instance URLs) ----------
+// Required because the packaged installer can't read .env — each user must
+// enter their own ServiceNow / Confluence / etc. instance URL.
+
+function normalizeBaseUrl(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  let url = raw.trim();
+  if (!url) return null;
+  if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+  // Strip trailing slash and any path — we only want the origin.
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}`;
+  } catch (_) {
+    return null;
+  }
+}
+
+ipcMain.handle('source:getConfig', async (_event, source) => {
+  return { success: true, config: tokenStore.getSourceConfig(source) || {} };
+});
+
+ipcMain.handle('source:saveConfig', async (_event, source, config) => {
+  if (!source) return { success: false, error: 'Source required' };
+  const baseUrl = normalizeBaseUrl(config?.baseUrl);
+  if (config?.baseUrl && !baseUrl) {
+    return { success: false, error: 'Invalid URL. Use e.g. https://yourcompany.service-now.com' };
+  }
+  tokenStore.saveSourceConfig(source, { ...config, baseUrl });
+  return { success: true, config: { ...config, baseUrl } };
+});
+
+ipcMain.handle('source:listConfigs', async () => {
+  return {
+    success: true,
+    configs: {
+      servicenow: tokenStore.getSourceConfig('servicenow') || {},
+      confluence: tokenStore.getSourceConfig('confluence') || {},
+      atlassian: tokenStore.getSourceConfig('atlassian') || {},
+      jira: tokenStore.getSourceConfig('jira') || {},
+      box: tokenStore.getSourceConfig('box') || {},
+      resources: tokenStore.getSourceConfig('resources') || {},
+      website: tokenStore.getSourceConfig('website') || {},
+    },
+  };
+});
+
 ipcMain.handle('search:query', async (_event, { query, options }) => {
   try {
     return { success: true, data: await search(query, options) };

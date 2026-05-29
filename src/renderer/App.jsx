@@ -411,6 +411,20 @@ export default function App() {
         setReindexing(false);
     }, []);
 
+    // Switch to settings view AND scroll to the top so the LoginPanel/
+    // SettingsPanel that just appeared above the search area is actually
+    // visible — otherwise users clicking "Open Settings" from a deep-scrolled
+    // AI card see no obvious change.
+    const openSettings = useCallback(() => {
+        setView('settings');
+        // Defer the scroll until after React paints the settings panel.
+        requestAnimationFrame(() => {
+            const mainEl = document.querySelector('main');
+            if (mainEl) mainEl.scrollTop = 0;
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+    }, []);
+
     const isSlackPanelOpen = Boolean(slackPanelUrl);
 
     const themeIcon = themePref === 'dark' ? '☀️' : themePref === 'light' ? '🌙' : '🖥️';
@@ -511,7 +525,7 @@ export default function App() {
                             </p>
                             <button
                                 type="button"
-                                onClick={() => setView('settings')}
+                                onClick={openSettings}
                                 className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-sm px-6 py-2.5 rounded-lg font-medium shadow-lg shadow-indigo-500/25 transition-all hover:shadow-indigo-500/40 hover:-translate-y-0.5"
                             >
                                 Connect now →
@@ -576,14 +590,14 @@ export default function App() {
                                         results={filteredResults}
                                         mode="internal"
                                         onCitationClick={aiCitationClick}
-                                        onOpenSettings={() => setView('settings')}
+                                        onOpenSettings={openSettings}
                                     />
                                     <AIAnswer
                                         key={`ai-web-${query}`}
                                         query={query}
                                         results={filteredResults}
                                         mode="web"
-                                        onOpenSettings={() => setView('settings')}
+                                        onOpenSettings={openSettings}
                                     />
                                 </div>
                             )}
@@ -622,7 +636,7 @@ export default function App() {
                             </span>
                             <button
                                 type="button"
-                                onClick={() => setView('settings')}
+                                onClick={openSettings}
                                 className="ml-3 bg-red-600 hover:bg-red-700 text-white text-xs px-3 py-1.5 rounded-md font-medium shrink-0 transition-colors"
                             >
                                 Open Settings

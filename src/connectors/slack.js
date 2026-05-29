@@ -365,9 +365,14 @@ async function searchSlack(query) {
         throw new Error('Slack not authenticated');
     }
 
-    const teamId = tokens.slackTeamId || process.env.SLACK_TEAM_ID;
+    let teamId = tokens.slackTeamId || process.env.SLACK_TEAM_ID;
+    // Self-heal: if the saved token is missing the team ID (older builds
+    // didn't capture it reliably), try to pull it from the persistent SSO
+    // window's cookies. Slack's `d-s` cookie is per-team but doesn't carry
+    // the ID; the easiest path is to ask the user to disconnect+reconnect.
     if (!teamId) {
-        throw new Error('Slack team ID not available — please re-login');
+        // Surface a friendlier, actionable message instead of just "re-login".
+        throw new Error('Slack workspace not identified. In Settings, click Disconnect on the Slack card, then Connect again — make sure you fully load your workspace (the page where you see channels) before the SSO window closes.');
     }
 
     const timeout = Number(process.env.SEARCH_TIMEOUT_MS || 15000);
