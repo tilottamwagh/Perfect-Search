@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { connectorConfetti } from '../utils/confetti';
 
 const SOURCES = [
     { id: 'slack', name: 'Slack', desc: 'Search messages and conversations', color: 'purple', login: () => window.perfectsearch.loginSlack() },
@@ -7,6 +8,7 @@ const SOURCES = [
     { id: 'atlassian', name: 'Atlassian Portal', desc: 'Unified search across Confluence pages, Jira issues, and more', color: 'sky', login: () => window.perfectsearch.loginAtlassian() },
     { id: 'box', name: 'Box', desc: 'Search files and folders in your Box workspace', color: 'indigo', login: () => window.perfectsearch.loginBox() },
     { id: 'jira', name: 'Jira', desc: 'Search Jira issues, projects, and dashboards', color: 'cyan', login: () => window.perfectsearch.loginJira() },
+    { id: 'resources', name: 'Ellucian Resources', desc: 'Search the Ellucian Resources portal — documentation, release notes, and announcements', color: 'amber', login: () => window.perfectsearch.loginResources() },
 ];
 
 const COLOR = {
@@ -16,6 +18,7 @@ const COLOR = {
     sky: { ring: 'ring-sky-500 dark:ring-sky-400', btn: 'bg-sky-600 hover:bg-sky-700 dark:bg-sky-500 dark:hover:bg-sky-600', tag: 'bg-sky-100 text-sky-800 dark:bg-sky-500/20 dark:text-sky-300' },
     indigo: { ring: 'ring-indigo-500 dark:ring-indigo-400', btn: 'bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600', tag: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-500/20 dark:text-indigo-300' },
     cyan: { ring: 'ring-cyan-500 dark:ring-cyan-400', btn: 'bg-cyan-600 hover:bg-cyan-700 dark:bg-cyan-500 dark:hover:bg-cyan-600', tag: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-500/20 dark:text-cyan-300' },
+    amber: { ring: 'ring-amber-500 dark:ring-amber-400', btn: 'bg-amber-600 hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600', tag: 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300' },
 };
 
 const PROVIDER_COLOR = {
@@ -34,6 +37,9 @@ function AiProviderRow({ provider, active, onChange }) {
     const [selectedModel, setSelectedModel] = React.useState(provider.activeModel || provider.defaultModel);
     const [busy, setBusy] = React.useState(false);
     const [msg, setMsg] = React.useState(null);
+    // Collapsed by default so the settings panel reads as a tidy list. Users
+    // expand whichever provider they want to configure or inspect.
+    const [expanded, setExpanded] = React.useState(false);
     const isActive = active === provider.id;
 
     React.useEffect(() => {
@@ -80,88 +86,122 @@ function AiProviderRow({ provider, active, onChange }) {
     const badge = PROVIDER_BADGE[provider.color] || PROVIDER_BADGE.amber;
 
     return (
-        <div className={`rounded-xl border p-4 flex flex-col gap-3 bg-gradient-to-br ${gradient}`}>
-            <div className="flex items-center justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                    <div className="flex items-center flex-wrap gap-2 mb-0.5">
-                        <span className="font-semibold text-slate-900 dark:text-slate-100">{provider.name}</span>
-                        {provider.configured && (
-                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${badge}`}>Configured</span>
-                        )}
-                        {isActive && (
-                            <span className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider bg-indigo-100 text-indigo-800 dark:bg-indigo-500/25 dark:text-indigo-300">
-                                ✨ Active
-                            </span>
-                        )}
-                        {provider.supportsWeb && (
-                            <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-sky-100 text-sky-800 dark:bg-sky-500/20 dark:text-sky-300" title="Supports web research">
-                                🌐 web
-                            </span>
-                        )}
-                    </div>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">{provider.keyHelp}</p>
-                    <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">{provider.pricing}</p>
+        <div className={`rounded-xl border bg-gradient-to-br ${gradient} transition-all`}>
+            {/* Header row — always visible. The whole row toggles expansion
+                (except the action buttons themselves, which stopPropagation). */}
+            <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                className="w-full text-left p-4 flex items-center justify-between gap-3 cursor-pointer"
+                aria-expanded={expanded}
+                aria-label={`${expanded ? 'Collapse' : 'Expand'} ${provider.name} settings`}
+            >
+                <div className="flex-1 min-w-0 flex items-center flex-wrap gap-2">
+                    <span className="font-semibold text-slate-900 dark:text-slate-100">{provider.name}</span>
+                    {provider.configured && (
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${badge}`}>Configured</span>
+                    )}
+                    {isActive && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider bg-indigo-100 text-indigo-800 dark:bg-indigo-500/25 dark:text-indigo-300">
+                            ✨ Active
+                        </span>
+                    )}
+                    {provider.supportsWeb && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-sky-100 text-sky-800 dark:bg-sky-500/20 dark:text-sky-300" title="Supports web research">
+                            🌐 web
+                        </span>
+                    )}
+                    {/* When collapsed, surface the active model so users see at a
+                        glance what's selected without expanding. */}
+                    {!expanded && provider.configured && (
+                        <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono ml-1 truncate">
+                            {selectedModel}
+                        </span>
+                    )}
                 </div>
-                <div className="flex flex-col gap-1.5 shrink-0">
+                <div className="flex items-center gap-2 shrink-0">
                     {provider.configured && !isActive && (
-                        <button
-                            type="button"
-                            onClick={makeActive}
+                        <span
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => { e.stopPropagation(); makeActive(); }}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); makeActive(); } }}
                             className="text-[11px] text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 px-3 py-1 rounded-md font-medium transition-colors"
                         >
                             Use this
-                        </button>
+                        </span>
                     )}
                     {provider.configured && (
-                        <button
-                            type="button"
-                            onClick={clear}
+                        <span
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => { e.stopPropagation(); clear(); }}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); clear(); } }}
                             className="text-[11px] text-slate-500 dark:text-slate-400 hover:text-red-500 dark:hover:text-red-400 border border-slate-200 dark:border-slate-700 hover:border-red-300 dark:hover:border-red-700 px-3 py-1 rounded-md transition-colors"
                         >
                             Remove
-                        </button>
+                        </span>
+                    )}
+                    {/* Chevron — rotates 180° when expanded so it points up,
+                        signalling "click to collapse". */}
+                    <span
+                        className={`text-slate-400 dark:text-slate-500 text-base leading-none inline-block transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}
+                        aria-hidden="true"
+                    >
+                        ▾
+                    </span>
+                </div>
+            </button>
+
+            {/* Expanded body — description, model picker, key input, messages. */}
+            {expanded && (
+                <div className="px-4 pb-4 -mt-1 flex flex-col gap-3 animate-fade-in">
+                    <div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">{provider.keyHelp}</p>
+                        <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">{provider.pricing}</p>
+                    </div>
+
+                    {Array.isArray(provider.models) && provider.models.length > 0 && (
+                        <div className="flex items-center gap-2">
+                            <label className="text-[11px] text-slate-500 dark:text-slate-400 font-medium shrink-0">Model</label>
+                            <select
+                                value={selectedModel}
+                                onChange={(e) => changeModel(e.target.value)}
+                                className="flex-1 text-xs font-mono px-2 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-indigo-500 dark:focus:border-indigo-400"
+                            >
+                                {provider.models.map((m) => (
+                                    <option key={m.id} value={m.id}>
+                                        {m.label} · {m.tier}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    )}
+
+                    {!provider.configured && (
+                        <div className="flex gap-2">
+                            <input
+                                type="password"
+                                value={value}
+                                onChange={(e) => setValue(e.target.value)}
+                                placeholder={`${provider.keyPrefix}…`}
+                                className="flex-1 text-xs font-mono px-3 py-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-indigo-500 dark:focus:border-indigo-400"
+                            />
+                            <button
+                                type="button"
+                                onClick={save}
+                                disabled={busy || value.length < 20}
+                                className="text-xs text-white px-4 py-2 rounded-md font-semibold bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-50 transition-all shadow-sm shadow-indigo-500/25"
+                            >
+                                {busy ? 'Testing…' : 'Save'}
+                            </button>
+                        </div>
+                    )}
+
+                    {msg && (
+                        <p className={`text-xs ${msg.ok ? 'text-green-700 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>{msg.text}</p>
                     )}
                 </div>
-            </div>
-            {/* Model picker — always visible. Editable both before and after
-                a key is saved, so users can change models on the fly. */}
-            {Array.isArray(provider.models) && provider.models.length > 0 && (
-                <div className="flex items-center gap-2">
-                    <label className="text-[11px] text-slate-500 dark:text-slate-400 font-medium shrink-0">Model</label>
-                    <select
-                        value={selectedModel}
-                        onChange={(e) => changeModel(e.target.value)}
-                        className="flex-1 text-xs font-mono px-2 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-indigo-500 dark:focus:border-indigo-400"
-                    >
-                        {provider.models.map((m) => (
-                            <option key={m.id} value={m.id}>
-                                {m.label} · {m.tier}
-                            </option>
-                        ))}
-                    </select>
-                </div>
-            )}
-            {!provider.configured && (
-                <div className="flex gap-2">
-                    <input
-                        type="password"
-                        value={value}
-                        onChange={(e) => setValue(e.target.value)}
-                        placeholder={`${provider.keyPrefix}…`}
-                        className="flex-1 text-xs font-mono px-3 py-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-indigo-500 dark:focus:border-indigo-400"
-                    />
-                    <button
-                        type="button"
-                        onClick={save}
-                        disabled={busy || value.length < 20}
-                        className="text-xs text-white px-4 py-2 rounded-md font-semibold bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-50 transition-all shadow-sm shadow-indigo-500/25"
-                    >
-                        {busy ? 'Testing…' : 'Save'}
-                    </button>
-                </div>
-            )}
-            {msg && (
-                <p className={`text-xs ${msg.ok ? 'text-green-700 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>{msg.text}</p>
             )}
         </div>
     );
@@ -206,6 +246,7 @@ export default function LoginPanel({ authStatus, onAuthChange }) {
         try {
             const result = await source.login();
             if (result.success) {
+                connectorConfetti(source.color);
                 await onAuthChange();
             } else {
                 setErrors((current) => ({ ...current, [source.id]: result.error }));

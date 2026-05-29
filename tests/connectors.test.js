@@ -51,6 +51,7 @@ const { searchServiceNow } = require('../src/connectors/servicenow');
 const { searchAtlassian } = require('../src/connectors/atlassian');
 const { searchBox } = require('../src/connectors/box');
 const { searchJira } = require('../src/connectors/jira');
+const { searchResources } = require('../src/connectors/resources');
 
 const MOCK_TEAM_ID = 'T0TEST123';
 const MOCK_CHANNEL_ID = 'C0GENERAL';
@@ -74,6 +75,7 @@ beforeEach(() => {
     });
     tokenStore.save('box', { baseUrl: 'https://ellucian.app.box.com', landingUrl: 'https://ellucian.app.box.com/folder/0' });
     tokenStore.save('jira', { baseUrl: 'https://ellucian.atlassian.net', sessionToken: 'jt' });
+    tokenStore.save('resources', { baseUrl: 'https://resources.elluciancloud.com', landingUrl: 'https://resources.elluciancloud.com/home' });
     jest.clearAllMocks();
 
     // The new slack connector calls executeJavaScript four times per search:
@@ -293,5 +295,19 @@ describe('Jira Connector', () => {
     it('throws when not authenticated', async () => {
         tokenStore.clear('jira');
         await expect(searchJira('x')).rejects.toThrow('Jira not authenticated');
+    });
+});
+
+describe('Resources Connector', () => {
+    it('returns a portal shortcut for the query (spaces encoded as +)', async () => {
+        const results = await searchResources('data connect');
+        expect(results).toHaveLength(1);
+        expect(results[0].source).toBe('Resources');
+        expect(results[0].link).toBe('https://resources.elluciancloud.com/search?content-lang=en-US&query=data+connect');
+    });
+
+    it('throws when not authenticated', async () => {
+        tokenStore.clear('resources');
+        await expect(searchResources('x')).rejects.toThrow('Resources not authenticated');
     });
 });

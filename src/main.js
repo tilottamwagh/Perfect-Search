@@ -1,8 +1,16 @@
 require('dotenv').config();
-const { app, BrowserWindow, ipcMain, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, nativeImage, protocol, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { loginSlack, loginConfluence, loginServiceNow, loginAtlassian, loginBox, loginJira, clearPersistentWindow } = require('./auth/session');
+const url = require('url');
+
+// Register `app://` as a privileged scheme so the renderer can <img src="app://brain.png">
+// pull files straight out of the project's assets/ directory at runtime, without
+// dragging static files through webpack. This must happen before app.whenReady().
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true } },
+]);
+const { loginSlack, loginConfluence, loginServiceNow, loginAtlassian, loginBox, loginJira, loginResources, clearPersistentWindow } = require('./auth/session');
 const tokenStore = require('./auth/tokenStore');
 const { search, clearCache } = require('./search/engine');
 const { buildIndex } = require('./connectors/website');
@@ -76,6 +84,32 @@ function createMainWindow() {
 }
 
 app.whenReady().then(() => {
+  // Serve files from the project's assets/ folder via app://<filename>.
+  // Resolves the project root for both dev (electron-forge start, where
+  // __dirname is ./src) and packaged builds (__dirname is asar root).
+  const ASSETS_ROOTS = [
+    path.join(__dirname, '..', '..', 'assets'),
+    path.join(__dirname, '..', 'assets'),
+    path.join(process.cwd(), 'assets'),
+  ];
+  protocol.handle('app', async (request) => {
+    try {
+      const u = new URL(request.url);
+      const requested = decodeURIComponent(u.hostname + u.pathname).replace(/^\/+/, '');
+      for (const root of ASSETS_ROOTS) {
+        const filePath = path.join(root, requested);
+        // Defensive: keep the resolved path inside the assets root.
+        if (!filePath.startsWith(root)) continue;
+        if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+          return net.fetch(url.pathToFileURL(filePath).href);
+        }
+      }
+      return new Response('not found', { status: 404 });
+    } catch (err) {
+      return new Response(`error: ${err.message}`, { status: 500 });
+    }
+  });
+
   logger.info('Phase 5', 'Electron app ready');
   createMainWindow();
 
@@ -156,6 +190,16 @@ ipcMain.handle('auth:login:box', async () => {
 ipcMain.handle('auth:login:jira', async () => {
   try {
     const data = await loginJira();
+    clearCache();
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('auth:login:resources', async () => {
+  try {
+    const data = await loginResources();
     clearCache();
     return { success: true, data };
   } catch (error) {

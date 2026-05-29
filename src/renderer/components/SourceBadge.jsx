@@ -9,6 +9,7 @@ const SOURCE_CONFIG = {
     Atlassian: { chip: 'bg-sky-100 text-sky-800 dark:bg-sky-500/15 dark:text-sky-300 dark:ring-1 dark:ring-sky-500/30', dot: 'bg-sky-500' },
     Box: { chip: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-500/15 dark:text-indigo-300 dark:ring-1 dark:ring-indigo-500/30', dot: 'bg-indigo-500' },
     Jira: { chip: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-500/15 dark:text-cyan-300 dark:ring-1 dark:ring-cyan-500/30', dot: 'bg-cyan-500' },
+    Resources: { chip: 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-1 dark:ring-amber-500/30', dot: 'bg-amber-500' },
     default: { chip: 'bg-orange-100 text-orange-800 dark:bg-orange-500/15 dark:text-orange-300 dark:ring-1 dark:ring-orange-500/30', dot: 'bg-orange-500' },
 };
 

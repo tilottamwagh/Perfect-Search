@@ -1,26 +1,54 @@
 import React from 'react';
 
 /**
- * PerfectSearch brand mark — a stylized "digital brain" / neural network.
+ * PerfectSearch brand mark.
  *
- * Design intent (matches the reference brain image the user provided):
- *   - Dark midnight-navy squircle backdrop, giving the cyan glow contrast.
- *   - Brain silhouette traced as a smooth bezier blob with a soft inner halo.
- *   - A network of small nodes ("neurons") wired by curved synaptic lines —
- *     the lines and dots use the same cyan family so the structure reads as
- *     coherent circuitry rather than random dots.
- *   - Two orange "active" neurons add a focal asymmetry and pick up the warm
- *     accent from the reference image.
- *   - SVG filter `glow` produces the bloom around each node so the icon
- *     reads as luminous even at 16x16 in a taskbar.
- *   - Every gradient / filter ID is suffixed with React.useId() so multiple
- *     `<Logo/>` instances on one page don't collide.
+ * Order of preference for what gets rendered:
+ *   1. A PNG/JPG the user dropped at assets/brain.png (preferred — that's
+ *      where the actual photographic-style brain image lives). Served via
+ *      the app:// protocol registered in main.js.
+ *   2. SVG fallback — the inline "digital brain" interpretation. Used
+ *      whenever the PNG hasn't been added yet, or fails to load.
+ *
+ * The component swaps automatically: it mounts the `<img>` first, and only
+ * if `onError` fires does it flip to the SVG. So users see their custom
+ * image instantly the moment they save assets/brain.png, no rebuild needed.
  */
-export default function Logo({ size = 32, className = '', withGlow = false }) {
+export default function Logo({ size = 44, className = '', withGlow = false }) {
     const uid = React.useId().replace(/:/g, '');
+    const [imgFailed, setImgFailed] = React.useState(false);
+
+    const glowClass = withGlow ? 'drop-shadow-[0_4px_18px_rgba(34,211,238,0.55)]' : '';
+
+    if (!imgFailed) {
+        // Try the user's real image first. If missing/broken, fall through to SVG.
+        return (
+            <span
+                className={`inline-flex items-center justify-center ${className} ${glowClass}`}
+                style={{ width: size, height: size }}
+            >
+                <img
+                    src="app://brain.png"
+                    width={size}
+                    height={size}
+                    alt="PerfectSearch"
+                    onError={() => setImgFailed(true)}
+                    style={{
+                        width: size,
+                        height: size,
+                        borderRadius: `${Math.round(size * 0.22)}px`,
+                        objectFit: 'cover',
+                        display: 'block',
+                    }}
+                />
+            </span>
+        );
+    }
+
+    // SVG fallback — same digital brain design from before.
     return (
         <span
-            className={`inline-flex items-center justify-center ${className} ${withGlow ? 'drop-shadow-[0_4px_18px_rgba(34,211,238,0.55)]' : ''}`}
+            className={`inline-flex items-center justify-center ${className} ${glowClass}`}
             style={{ width: size, height: size }}
         >
             <svg
@@ -58,14 +86,8 @@ export default function Logo({ size = 32, className = '', withGlow = false }) {
                         </feMerge>
                     </filter>
                 </defs>
-
-                {/* Midnight squircle */}
                 <rect width="64" height="64" rx="14" fill={`url(#bg-${uid})`} />
-
-                {/* Soft inner halo behind the brain */}
                 <ellipse cx="32" cy="33" rx="22" ry="19" fill={`url(#halo-${uid})`} />
-
-                {/* Brain silhouette — two overlapping lobes via smooth bezier path */}
                 <path
                     d="M22 18 C16 19 12 24 13 30 C9 33 11 39 16 41 C17 47 24 50 30 47 C33 50 39 49 41 45 C48 47 53 41 51 35 C55 32 53 25 48 24 C46 17 38 14 32 18 C29 15 24 15 22 18 Z"
                     fill="#0ea5e9"
@@ -74,8 +96,6 @@ export default function Logo({ size = 32, className = '', withGlow = false }) {
                     strokeWidth="0.6"
                     strokeOpacity="0.7"
                 />
-
-                {/* Synaptic connection lines */}
                 <g stroke="#22d3ee" strokeWidth="0.45" strokeOpacity="0.55" fill="none" strokeLinecap="round">
                     <path d="M21 24 Q26 22 30 26" />
                     <path d="M30 26 Q34 22 39 25" />
@@ -91,8 +111,6 @@ export default function Logo({ size = 32, className = '', withGlow = false }) {
                     <path d="M34 32 L30 42" />
                     <path d="M34 32 Q36 28 39 25" />
                 </g>
-
-                {/* Cyan neuron nodes */}
                 <g fill="#67e8f9" filter={`url(#glow-${uid})`}>
                     <circle cx="21" cy="24" r="1.1" />
                     <circle cx="30" cy="26" r="1.1" />
@@ -104,8 +122,6 @@ export default function Logo({ size = 32, className = '', withGlow = false }) {
                     <circle cx="38" cy="36" r="1.1" />
                     <circle cx="39" cy="44" r="1.1" />
                 </g>
-
-                {/* Smaller background "spark" dots for density */}
                 <g fill="#22d3ee" opacity="0.55">
                     <circle cx="26" cy="30" r="0.55" />
                     <circle cx="33" cy="38" r="0.55" />
@@ -114,8 +130,6 @@ export default function Logo({ size = 32, className = '', withGlow = false }) {
                     <circle cx="35" cy="22" r="0.55" />
                     <circle cx="44" cy="38" r="0.55" />
                 </g>
-
-                {/* Two "active" orange neurons — focal accents */}
                 <g filter={`url(#glow-${uid})`}>
                     <circle cx="34" cy="32" r="2" fill={`url(#hot-${uid})`} />
                     <circle cx="46" cy="32" r="1.7" fill={`url(#hot-${uid})`} />

@@ -148,7 +148,7 @@ function renderMarkdown(text, onCitationClick) {
     return out;
 }
 
-export default function AIAnswer({ query, results, mode = 'internal', onCitationClick }) {
+export default function AIAnswer({ query, results, mode = 'internal', onCitationClick, onOpenSettings }) {
     const [text, setText] = useState('');
     const [status, setStatus] = useState('idle');
     const [error, setError] = useState(null);
@@ -157,6 +157,7 @@ export default function AIAnswer({ query, results, mode = 'internal', onCitation
     const [webSources, setWebSources] = useState([]);
     const [provider, setProvider] = useState(null);
     const [model, setModel] = useState(null);
+    const [providers, setProviders] = useState([]);
     const requestIdRef = useRef(0);
 
     const isWeb = mode === 'web';
@@ -172,6 +173,7 @@ export default function AIAnswer({ query, results, mode = 'internal', onCitation
 
         try {
             const statusResp = await window.perfectsearch.getAiProviders();
+            setProviders(statusResp.providers || []);
             if (!statusResp.active) {
                 setStatus('unconfigured');
                 return;
@@ -272,16 +274,60 @@ export default function AIAnswer({ query, results, mode = 'internal', onCitation
                 </div>
             </div>
 
-            {status === 'unconfigured' && (
-                <div className="text-sm text-slate-700 dark:text-slate-300 p-3 rounded-lg bg-white/60 dark:bg-slate-800/40 border border-dashed border-slate-300 dark:border-slate-700">
-                    <p className="mb-2">
-                        <strong>Set an Anthropic API key in Settings</strong> to enable AI synthesis.
-                    </p>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Get a key at <span className="font-mono">console.anthropic.com</span> → API Keys.
-                    </p>
-                </div>
-            )}
+            {status === 'unconfigured' && (() => {
+                const configured = providers.filter((p) => p.configured);
+                const hasAnyKey = configured.length > 0;
+                const providerOptions = [
+                    { name: 'Anthropic Claude', host: 'console.anthropic.com', supportsWeb: true },
+                    { name: 'Google Gemini', host: 'aistudio.google.com', supportsWeb: true },
+                    { name: 'OpenAI', host: 'platform.openai.com', supportsWeb: false },
+                ];
+                const relevant = isWeb ? providerOptions.filter((p) => p.supportsWeb) : providerOptions;
+                return (
+                    <div className="text-sm text-slate-700 dark:text-slate-300 p-3 rounded-lg bg-white/60 dark:bg-slate-800/40 border border-dashed border-slate-300 dark:border-slate-700">
+                        {hasAnyKey ? (
+                            <>
+                                <p className="mb-2">
+                                    <strong>No active AI provider.</strong> You have a key saved for{' '}
+                                    <span className="font-semibold">{configured.map((p) => p.name).join(', ')}</span>
+                                    {' '}— open Settings and click <em>Use</em> on one to activate it.
+                                </p>
+                            </>
+                        ) : (
+                            <>
+                                <p className="mb-2">
+                                    <strong>Set an API key in Settings</strong> to enable {isWeb ? 'web research' : 'AI synthesis'}.
+                                    Any one of these providers works:
+                                </p>
+                                <ul className="text-xs text-slate-600 dark:text-slate-400 space-y-0.5 mb-2 ml-1">
+                                    {relevant.map((p) => (
+                                        <li key={p.name}>
+                                            • <span className="font-semibold">{p.name}</span> — key at{' '}
+                                            <span className="font-mono">{p.host}</span>
+                                            {isWeb ? '' : ''}
+                                        </li>
+                                    ))}
+                                </ul>
+                                {isWeb && (
+                                    <p className="text-[11px] text-slate-500 dark:text-slate-400 italic">
+                                        Note: Web Research needs Anthropic or Gemini — OpenAI doesn't expose a web-search tool.
+                                    </p>
+                                )}
+                            </>
+                        )}
+                        {onOpenSettings && (
+                            <button
+                                type="button"
+                                onClick={onOpenSettings}
+                                className="mt-2 inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-md
+                                    bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors"
+                            >
+                                ⚙ Open Settings
+                            </button>
+                        )}
+                    </div>
+                );
+            })()}
 
             {status === 'error' && (
                 <div className="text-sm text-red-700 dark:text-red-300 p-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900">

@@ -133,27 +133,38 @@ async function synthesize({ query, results, apiKey, onChunk, model }) {
 // Web variant: enables Gemini's built-in Google Search grounding. The model
 // runs live searches and returns answers with grounded citations. Free tier
 // supports this on the Flash models.
+//
+// We use non-streaming `generateContent` here because grounded responses
+// often arrive as a single payload after the search tool runs — streaming
+// added complexity without benefit and previously yielded empty text when
+// the model emitted "thought" parts before the final answer.
 async function synthesizeWithWeb({ query, apiKey, onChunk, model }) {
     const modelId = model || DEFAULT_MODEL;
     const startedAt = Date.now();
     logger.info('Phase 6', `[gemini:${modelId}:web] researching "${query}"`);
 
-    const WEB_PROMPT = `You are a research assistant. Search the web for information about: "${query}"
+    const WEB_PROMPT = `Search the web for information about: "${query}"
 
-Write a concise markdown summary with:
+Write a concise markdown answer with:
 1. A one-sentence TL;DR
-2. Key findings as bullet points (4-8 bullets max)
-3. A "Sources" section listing the URLs
+2. Key findings as bullet points (4-8 bullets)
+3. A "Sources" section listing the URLs you used
 
 Stay focused on what's actually in the search results. Do not speculate.`;
 
+    // The grounding tool key differs across Gemini families:
+    //   - Gemini 2.x  → `google_search`
+    //   - Gemini 1.5  → `google_search_retrieval`
+    const isLegacy = /^gemini-1\.5/.test(modelId);
+    const tool = isLegacy ? { google_search_retrieval: {} } : { google_search: {} };
+
     const body = {
         contents: [{ role: 'user', parts: [{ text: WEB_PROMPT }] }],
-        tools: [{ google_search: {} }],
+        tools: [tool],
         generationConfig: { maxOutputTokens: 3072, temperature: 0.3 },
     };
 
-    const resp = await fetch(gem(apiKey, modelId, 'streamGenerateContent'), {
+    const resp = await fetch(gem(apiKey, modelId, 'generateContent'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -163,42 +174,73 @@ Stay focused on what's actually in the search results. Do not speculate.`;
         throw new Error(`Gemini web HTTP ${resp.status}: ${errBody.substring(0, 400)}`);
     }
 
-    let fullText = '';
-    let usage = null;
-    const webSources = [];
-    const seenUrls = new Set();
+    const data = await resp.json();
+    const cand = data?.candidates?.[0];
+    const parts = cand?.content?.parts || [];
 
-    for await (const chunk of sseLines(resp)) {
-        const cand = chunk?.candidates?.[0];
-        const parts = cand?.content?.parts || [];
-        for (const p of parts) {
-            if (typeof p.text === 'string') {
-                fullText += p.text;
-                if (onChunk) try { onChunk(p.text); } catch (_) {}
-            }
-        }
-        // Gemini exposes grounding metadata with the URLs it searched.
-        const grounding = cand?.groundingMetadata;
-        if (grounding?.groundingChunks) {
-            for (const g of grounding.groundingChunks) {
-                const uri = g?.web?.uri;
-                const title = g?.web?.title;
-                if (uri && !seenUrls.has(uri)) {
-                    seenUrls.add(uri);
-                    webSources.push({ title: title || uri, url: uri, snippet: null });
-                }
-            }
-        }
-        if (chunk?.usageMetadata) usage = chunk.usageMetadata;
+    // Concatenate every textual part. Some grounded responses split the
+    // answer across multiple parts; some include `thought:true` reasoning
+    // parts we want to skip.
+    let fullText = '';
+    for (const p of parts) {
+        if (p?.thought) continue;
+        if (typeof p?.text === 'string') fullText += p.text;
     }
 
+    // Extract grounded URLs. Newer responses expose them under
+    // `groundingMetadata.groundingChunks[].web`; older ones under
+    // `groundingAttributions[].web`. Handle both.
+    const webSources = [];
+    const seenUrls = new Set();
+    const pushUrl = (uri, title) => {
+        if (!uri || seenUrls.has(uri)) return;
+        seenUrls.add(uri);
+        webSources.push({ title: title || uri, url: uri, snippet: null });
+    };
+    const grounding = cand?.groundingMetadata;
+    if (Array.isArray(grounding?.groundingChunks)) {
+        for (const g of grounding.groundingChunks) pushUrl(g?.web?.uri, g?.web?.title);
+    }
+    if (Array.isArray(grounding?.groundingAttributions)) {
+        for (const g of grounding.groundingAttributions) pushUrl(g?.web?.uri, g?.web?.title);
+    }
+    if (Array.isArray(grounding?.searchEntryPoint?.renderedContent)) {
+        // best-effort: rendered content sometimes contains anchor URLs
+    }
+
+    // If Gemini blocked the response (safety filter or similar), surface that.
+    if (!fullText && cand?.finishReason && cand.finishReason !== 'STOP') {
+        const reason = cand.finishReason;
+        const safety = cand?.safetyRatings?.map((r) => `${r.category}:${r.probability}`).join(', ') || '';
+        throw new Error(`Gemini returned no text (finishReason=${reason}${safety ? ' · ' + safety : ''}). Try a different query or model.`);
+    }
+
+    if (!fullText) {
+        // Dump shape so we can diagnose if Gemini ever returns an unexpected layout.
+        const shape = JSON.stringify({
+            partCount: parts.length,
+            partKinds: parts.map((p) => Object.keys(p || {})),
+            finishReason: cand?.finishReason,
+            promptFeedback: data?.promptFeedback,
+        });
+        logger.warn('Phase 6', `[gemini:${modelId}:web] empty text · ${shape}`);
+        throw new Error('Gemini returned no answer text. Your model may not support web grounding on the free tier — try gemini-1.5-flash or switch to Anthropic Claude.');
+    }
+
+    // Emit the full text as one chunk so the UI renders it.
+    if (onChunk) try { onChunk(fullText); } catch (_) {}
+
+    const usage = data?.usageMetadata
+        ? { input_tokens: data.usageMetadata.promptTokenCount, output_tokens: data.usageMetadata.candidatesTokenCount }
+        : null;
+
     const elapsed = Date.now() - startedAt;
-    logger.success('Phase 6', `[gemini:${modelId}:web] done in ${elapsed}ms · sources=${webSources.length}`);
+    logger.success('Phase 6', `[gemini:${modelId}:web] done in ${elapsed}ms · sources=${webSources.length} · chars=${fullText.length}`);
 
     return {
         text: fullText,
         webSources,
-        usage: usage ? { input_tokens: usage.promptTokenCount, output_tokens: usage.candidatesTokenCount } : null,
+        usage,
         model: modelId,
         elapsedMs: elapsed,
     };

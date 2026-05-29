@@ -5,6 +5,7 @@ const { searchServiceNow } = require('../connectors/servicenow');
 const { searchAtlassian } = require('../connectors/atlassian');
 const { searchBox } = require('../connectors/box');
 const { searchJira } = require('../connectors/jira');
+const { searchResources } = require('../connectors/resources');
 const { searchWebsite } = require('../connectors/website');
 const tokenStore = require('../auth/tokenStore');
 const logger = require('../utils/logger');
@@ -112,19 +113,21 @@ async function search(query, options = {}) {
         atlassian: options.atlassian !== false && status.atlassian,
         box: options.box !== false && status.box,
         jira: options.jira !== false && status.jira,
+        resources: options.resources !== false && status.resources,
         website: options.website !== false,
     };
 
     logger.info('Phase 4', `Unified search for "${trimmed}"`);
     const startedAt = Date.now();
 
-    const [slackRes, confRes, snowRes, atlRes, boxRes, jiraRes, webRes] = await Promise.allSettled([
+    const [slackRes, confRes, snowRes, atlRes, boxRes, jiraRes, resRes, webRes] = await Promise.allSettled([
         sourcesToSearch.slack ? searchSlack(trimmed) : Promise.resolve([]),
         sourcesToSearch.confluence ? searchConfluence(trimmed) : Promise.resolve([]),
         sourcesToSearch.servicenow ? searchServiceNow(trimmed) : Promise.resolve([]),
         sourcesToSearch.atlassian ? searchAtlassian(trimmed) : Promise.resolve([]),
         sourcesToSearch.box ? searchBox(trimmed) : Promise.resolve([]),
         sourcesToSearch.jira ? searchJira(trimmed) : Promise.resolve([]),
+        sourcesToSearch.resources ? searchResources(trimmed) : Promise.resolve([]),
         sourcesToSearch.website ? searchWebsite(trimmed) : Promise.resolve([]),
     ]);
 
@@ -135,6 +138,7 @@ async function search(query, options = {}) {
         ...(atlRes.status === 'fulfilled' ? atlRes.value : []),
         ...(boxRes.status === 'fulfilled' ? boxRes.value : []),
         ...(jiraRes.status === 'fulfilled' ? jiraRes.value : []),
+        ...(resRes.status === 'fulfilled' ? resRes.value : []),
         ...(webRes.status === 'fulfilled' ? webRes.value : []),
     ];
 
@@ -147,6 +151,7 @@ async function search(query, options = {}) {
             atlassian: atlRes.status === 'fulfilled' ? atlRes.value.length : 0,
             box: boxRes.status === 'fulfilled' ? boxRes.value.length : 0,
             jira: jiraRes.status === 'fulfilled' ? jiraRes.value.length : 0,
+            resources: resRes.status === 'fulfilled' ? resRes.value.length : 0,
             website: webRes.status === 'fulfilled' ? webRes.value.length : 0,
         },
         errors: {
@@ -156,6 +161,7 @@ async function search(query, options = {}) {
             atlassian: atlRes.status === 'rejected' ? atlRes.reason?.message : null,
             box: boxRes.status === 'rejected' ? boxRes.reason?.message : null,
             jira: jiraRes.status === 'rejected' ? jiraRes.reason?.message : null,
+            resources: resRes.status === 'rejected' ? resRes.reason?.message : null,
             website: webRes.status === 'rejected' ? webRes.reason?.message : null,
         },
         total: 0,

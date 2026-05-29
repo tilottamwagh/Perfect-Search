@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('perfectsearch', {
     loginAtlassian: () => ipcRenderer.invoke('auth:login:atlassian'),
     loginBox: () => ipcRenderer.invoke('auth:login:box'),
     loginJira: () => ipcRenderer.invoke('auth:login:jira'),
+    loginResources: () => ipcRenderer.invoke('auth:login:resources'),
     logout: (source) => ipcRenderer.invoke('auth:logout', source),
     search: (query, options) => ipcRenderer.invoke('search:query', { query, options }),
     clearCache: () => ipcRenderer.invoke('search:clearCache'),

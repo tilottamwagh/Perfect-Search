@@ -7,12 +7,13 @@ import LoadingSpinner from './components/LoadingSpinner';
 import AIAnswer from './components/AIAnswer';
 import Logo from './components/Logo';
 import { useTheme } from './hooks/useTheme';
+import { welcomeConfetti } from './utils/confetti';
 
-const SOURCE_FILTERS = ['All', 'Slack', 'Confluence', 'ServiceNow', 'Atlassian', 'Box', 'Jira'];
+const SOURCE_FILTERS = ['All', 'Slack', 'Confluence', 'ServiceNow', 'Atlassian', 'Box', 'Jira', 'Resources'];
 
 export default function App() {
     const { preference: themePref, cycle: cycleTheme } = useTheme();
-    const [authStatus, setAuthStatus] = useState({ slack: false, confluence: false, servicenow: false, atlassian: false, box: false, jira: false });
+    const [authStatus, setAuthStatus] = useState({ slack: false, confluence: false, servicenow: false, atlassian: false, box: false, jira: false, resources: false });
     const [results, setResults] = useState([]);
     const [sourceStats, setSourceStats] = useState({});
     const [errors, setErrors] = useState({});
@@ -304,6 +305,16 @@ export default function App() {
         loadAuthStatus();
     }, [loadAuthStatus]);
 
+    // Welcome confetti — fires once per app launch when the dashboard mounts.
+    // Empty dep array + a top-level guard keeps it from re-running if React
+    // strict-mode double-invokes the effect during development.
+    const welcomedRef = useRef(false);
+    useEffect(() => {
+        if (welcomedRef.current) return;
+        welcomedRef.current = true;
+        welcomeConfetti();
+    }, []);
+
     // Listen for main process telling us to open the Slack side panel
     useEffect(() => {
         const unsub = window.perfectsearch.onSlackPanelOpened((url) => {
@@ -416,9 +427,9 @@ export default function App() {
                 }}
             >
                 <header className="glass-header sticky top-0 z-30 px-6 py-3 flex items-center justify-between shrink-0">
-                    <div className="flex items-center gap-2.5">
-                        <Logo size={32} withGlow />
-                        <span className="font-extrabold tracking-tight text-lg bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 dark:from-indigo-400 dark:via-purple-400 dark:to-pink-400 bg-clip-text text-transparent">
+                    <div className="flex items-center gap-3">
+                        <Logo size={44} withGlow />
+                        <span className="font-extrabold tracking-tight text-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 dark:from-indigo-400 dark:via-purple-400 dark:to-pink-400 bg-clip-text text-transparent">
                             PerfectSearch
                         </span>
                     </div>
@@ -430,6 +441,7 @@ export default function App() {
                             { id: 'atlassian', label: 'AT', color: 'bg-sky-500' },
                             { id: 'box', label: 'BX', color: 'bg-indigo-500' },
                             { id: 'jira', label: 'JR', color: 'bg-cyan-500' },
+                            { id: 'resources', label: 'ER', color: 'bg-amber-500' },
                         ].map((source) => (
                             <div
                                 key={source.id}
@@ -477,6 +489,17 @@ export default function App() {
                 )}
 
                 <main className="flex-1 w-full mx-auto px-4 py-6 flex flex-col gap-5 overflow-y-auto" style={{ maxWidth: '56rem' }}>
+                    {!query && (
+                        <div className="text-center pt-4 pb-2 animate-fade-in">
+                            <h1 className="text-3xl sm:text-4xl font-bold tracking-tight bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 dark:from-indigo-400 dark:via-purple-400 dark:to-pink-400 bg-clip-text text-transparent">
+                                Welcome to Your Perfect Search Portal
+                            </h1>
+                            <p className="mt-2 text-sm sm:text-base text-slate-600 dark:text-slate-400">
+                                Make your Search result Perfect
+                            </p>
+                        </div>
+                    )}
+
                     <SearchBar onSearch={handleSearch} isLoading={isLoading} resultCount={results.length > 0 ? results.length : null} />
 
                     {!anyConnected && !query && (
@@ -553,12 +576,14 @@ export default function App() {
                                         results={filteredResults}
                                         mode="internal"
                                         onCitationClick={aiCitationClick}
+                                        onOpenSettings={() => setView('settings')}
                                     />
                                     <AIAnswer
                                         key={`ai-web-${query}`}
                                         query={query}
                                         results={filteredResults}
                                         mode="web"
+                                        onOpenSettings={() => setView('settings')}
                                     />
                                 </div>
                             )}

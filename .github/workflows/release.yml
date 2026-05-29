@@ -1,0 +1,97 @@
+name: Build installers
+
+# Builds Windows .exe, macOS .dmg, and Linux .deb/.rpm installers on every
+# release tag and on manual dispatch. Each platform runs on its native runner
+# because Electron Forge's makers (Squirrel.Windows, hdiutil-based DMG,
+# dpkg/rpmbuild) cannot reliably cross-compile from a foreign host.
+#
+# Tag a release like:  git tag v1.0.0 && git push --tags
+# Or trigger manually from the Actions tab.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: PerfectSearch-windows
+            artifact_path: out/make/**/*.exe
+          - os: macos-latest
+            artifact_name: PerfectSearch-mac
+            artifact_path: out/make/**/*.dmg
+          - os: ubuntu-latest
+            artifact_name: PerfectSearch-linux
+            artifact_path: |
+              out/make/**/*.deb
+              out/make/**/*.rpm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # rpmbuild + dpkg are needed by maker-rpm / maker-deb on Ubuntu runners.
+      - name: Install Linux build deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm fakeroot dpkg
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Build icons
+        run: npm run build:icons
+
+      - name: Make installers
+        run: npm run make
+        env:
+          # Code-signing secrets are optional. If you configure them as repo
+          # secrets the installers will be signed; otherwise builds produce
+          # unsigned artifacts (users see a one-time security prompt).
+          WINDOWS_PFX_PATH: ${{ secrets.WINDOWS_PFX_PATH }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: warn
+
+  release:
+    name: Attach to GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create / update release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          generate_release_notes: true
+          fail_on_unmatched_files: false

@@ -449,6 +449,43 @@ async function loginJira() {
     }
 }
 
+// Ellucian Resources — the portal at resources.elluciancloud.com. SSO
+// (typically Okta) redirects the user away to authenticate and then back to
+// the portal home. We reuse the Box-style "URL settles on the target domain"
+// detection because Ellucian's auth chain can use multiple intermediate
+// cookies and the only reliable "you are signed in" signal is "the URL bar
+// stops moving and is on resources.elluciancloud.com".
+async function loginResources() {
+    logger.info('Phase 2', 'Opening Ellucian Resources SSO window');
+    const baseUrl = process.env.RESOURCES_BASE_URL || 'https://resources.elluciancloud.com';
+    const win = openSSOWindow('resources', 'Ellucian Resources Login', `${baseUrl}/home`);
+
+    try {
+        const landingUrl = await waitForUrlOnDomain(win, 'elluciancloud.com', 5);
+
+        const sess = session.fromPartition(getPartition('resources'));
+        const cookies = await sess.cookies.get({});
+        const portalCookies = cookies.filter((c) => c.domain && c.domain.replace(/^\./, '').endsWith('elluciancloud.com'));
+
+        return finalizeLogin({
+            source: 'resources',
+            win,
+            successMessage: `Ellucian Resources SSO login complete (landed on ${landingUrl})`,
+            tokenData: {
+                landingUrl,
+                cookieHeader: cookieHeaderFrom(portalCookies),
+                baseUrl,
+            },
+        });
+    } catch (error) {
+        logger.error('Phase 2', 'Ellucian Resources SSO failed', error);
+        if (!win.isDestroyed()) {
+            win.close();
+        }
+        throw error;
+    }
+}
+
 async function reauth(source) {
     tokenStore.clear(source);
     switch (source) {
@@ -464,6 +501,8 @@ async function reauth(source) {
             return loginBox();
         case 'jira':
             return loginJira();
+        case 'resources':
+            return loginResources();
         default:
             throw new Error(`Unknown source: ${source}`);
     }
@@ -476,6 +515,7 @@ module.exports = {
     loginAtlassian,
     loginBox,
     loginJira,
+    loginResources,
     reauth,
     getPersistentWindow,
     clearPersistentWindow,
