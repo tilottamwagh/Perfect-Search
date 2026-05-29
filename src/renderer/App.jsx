@@ -5,6 +5,7 @@ import LoginPanel from './components/LoginPanel';
 import SettingsPanel from './components/SettingsPanel';
 import LoadingSpinner from './components/LoadingSpinner';
 import AIAnswer from './components/AIAnswer';
+import Logo from './components/Logo';
 import { useTheme } from './hooks/useTheme';
 
 const SOURCE_FILTERS = ['All', 'Slack', 'Confluence', 'ServiceNow', 'Atlassian', 'Box', 'Jira'];
@@ -416,7 +417,7 @@ export default function App() {
             >
                 <header className="glass-header sticky top-0 z-30 px-6 py-3 flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-2.5">
-                        <span className="text-2xl">🔭</span>
+                        <Logo size={32} withGlow />
                         <span className="font-extrabold tracking-tight text-lg bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 dark:from-indigo-400 dark:via-purple-400 dark:to-pink-400 bg-clip-text text-transparent">
                             PerfectSearch
                         </span>
@@ -545,12 +546,21 @@ export default function App() {
                             </div>
 
                             {aiOpen && (
-                                <AIAnswer
-                                    key={`ai-${query}`}
-                                    query={query}
-                                    results={filteredResults}
-                                    onCitationClick={aiCitationClick}
-                                />
+                                <div className="flex flex-col gap-3">
+                                    <AIAnswer
+                                        key={`ai-internal-${query}`}
+                                        query={query}
+                                        results={filteredResults}
+                                        mode="internal"
+                                        onCitationClick={aiCitationClick}
+                                    />
+                                    <AIAnswer
+                                        key={`ai-web-${query}`}
+                                        query={query}
+                                        results={filteredResults}
+                                        mode="web"
+                                    />
+                                </div>
                             )}
 
                             <div className="flex flex-col gap-3">

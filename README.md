@@ -1,5 +1,9 @@
 # PerfectSearch
 
+<p align="center">
+  <img src="assets/logo.svg" width="120" alt="PerfectSearch logo" />
+</p>
+
 > Unified enterprise desktop search across Slack, Confluence, ServiceNow, Atlassian Portal, Box, and Jira — with AI synthesis powered by your choice of Anthropic Claude, Google Gemini, or OpenAI.
 
 PerfectSearch is an Electron desktop app that lets you search every enterprise tool you use from one search bar. Connect each source once via SSO, type a query, and see results from all sources interleaved, deduplicated, and ranked. Optionally ask the built-in AI to synthesize a cited answer.
@@ -8,7 +12,7 @@ PerfectSearch is an Electron desktop app that lets you search every enterprise t
 
 ## Features
 
-### 🔭 Unified search across 6 sources
+### Unified search across 6 sources
 - **Slack** — messages and files via `/api/search.all` with pagination
 - **Confluence** — REST API with CQL queries (with portal-shortcut fallback)
 - **ServiceNow** — Customer Cases (`sn_customerservice_case`), Incidents, KB articles

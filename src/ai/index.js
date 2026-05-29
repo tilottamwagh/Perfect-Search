@@ -7,15 +7,17 @@ const PROVIDERS = { anthropic, gemini, openai };
 const ORDER = ['anthropic', 'gemini', 'openai'];
 
 function listProviders() {
-    return ORDER.map((id) => ({
-        ...PROVIDERS[id].META,
-        configured: tokenStore.hasAiKey(id),
-    }));
+    return ORDER.map((id) => {
+        const p = PROVIDERS[id];
+        const userModel = tokenStore.getAiModel(id);
+        return {
+            ...p.META,
+            configured: tokenStore.hasAiKey(id),
+            activeModel: userModel || p.META.defaultModel,
+        };
+    });
 }
 
-// Find the provider to use for this request. Order of preference:
-// 1. The explicitly selected active provider, if configured.
-// 2. The first provider in ORDER that has a key set.
 function resolveActiveProvider() {
     const selected = tokenStore.getActiveAiProvider();
     if (selected && tokenStore.hasAiKey(selected)) return selected;
@@ -36,8 +38,23 @@ async function synthesize({ query, results, onChunk }) {
     if (!providerId) throw new Error('AI_NOT_CONFIGURED');
     const apiKey = tokenStore.getAiKey(providerId);
     if (!apiKey) throw new Error('AI_NOT_CONFIGURED');
-    const result = await PROVIDERS[providerId].synthesize({ query, results, apiKey, onChunk });
+    const model = tokenStore.getAiModel(providerId) || PROVIDERS[providerId].META.defaultModel;
+    const result = await PROVIDERS[providerId].synthesize({ query, results, apiKey, onChunk, model });
     return { ...result, provider: providerId };
 }
 
-module.exports = { listProviders, resolveActiveProvider, testKey, synthesize, PROVIDERS, ORDER };
+async function synthesizeWithWeb({ query, onChunk }) {
+    const providerId = resolveActiveProvider();
+    if (!providerId) throw new Error('AI_NOT_CONFIGURED');
+    const adapter = PROVIDERS[providerId];
+    if (!adapter.META.supportsWeb) {
+        throw new Error(`WEB_NOT_SUPPORTED: ${adapter.META.name} does not support web research. Switch to Anthropic Claude or Google Gemini in Settings.`);
+    }
+    const apiKey = tokenStore.getAiKey(providerId);
+    if (!apiKey) throw new Error('AI_NOT_CONFIGURED');
+    const model = tokenStore.getAiModel(providerId) || adapter.META.defaultModel;
+    const result = await adapter.synthesizeWithWeb({ query, apiKey, onChunk, model });
+    return { ...result, provider: providerId };
+}
+
+module.exports = { listProviders, resolveActiveProvider, testKey, synthesize, synthesizeWithWeb, PROVIDERS, ORDER };

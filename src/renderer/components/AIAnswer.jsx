@@ -148,15 +148,18 @@ function renderMarkdown(text, onCitationClick) {
     return out;
 }
 
-export default function AIAnswer({ query, results, onCitationClick }) {
+export default function AIAnswer({ query, results, mode = 'internal', onCitationClick }) {
     const [text, setText] = useState('');
-    const [status, setStatus] = useState('idle'); // idle | streaming | done | error | unconfigured
+    const [status, setStatus] = useState('idle');
     const [error, setError] = useState(null);
     const [usage, setUsage] = useState(null);
     const [picked, setPicked] = useState([]);
+    const [webSources, setWebSources] = useState([]);
     const [provider, setProvider] = useState(null);
     const [model, setModel] = useState(null);
     const requestIdRef = useRef(0);
+
+    const isWeb = mode === 'web';
 
     const run = async () => {
         const requestId = ++requestIdRef.current;
@@ -164,6 +167,7 @@ export default function AIAnswer({ query, results, onCitationClick }) {
         setError(null);
         setUsage(null);
         setPicked([]);
+        setWebSources([]);
         setStatus('streaming');
 
         try {
@@ -173,21 +177,22 @@ export default function AIAnswer({ query, results, onCitationClick }) {
                 return;
             }
 
-            const resp = await window.perfectsearch.aiSynthesize(
-                requestId,
-                query,
-                results,
-                (delta) => {
-                    if (requestId !== requestIdRef.current) return;
-                    setText((prev) => prev + delta);
-                }
-            );
+            const resp = isWeb
+                ? await window.perfectsearch.aiSynthesizeWeb(
+                    requestId, query,
+                    (delta) => { if (requestId === requestIdRef.current) setText((p) => p + delta); }
+                )
+                : await window.perfectsearch.aiSynthesize(
+                    requestId, query, results,
+                    (delta) => { if (requestId === requestIdRef.current) setText((p) => p + delta); }
+                );
 
             if (requestId !== requestIdRef.current) return;
 
             if (resp.success) {
                 setUsage(resp.data.usage);
                 setPicked(resp.data.picked || []);
+                setWebSources(resp.data.webSources || []);
                 setProvider(resp.data.provider || null);
                 setModel(resp.data.model || null);
                 setStatus('done');
@@ -202,7 +207,6 @@ export default function AIAnswer({ query, results, onCitationClick }) {
         }
     };
 
-    // Auto-run when the user expands the panel for a query — but only the first time
     useEffect(() => {
         if (status === 'idle') run();
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -212,13 +216,22 @@ export default function AIAnswer({ query, results, onCitationClick }) {
         try { await navigator.clipboard.writeText(text); } catch (_) {}
     };
 
+    const containerGradient = isWeb
+        ? 'from-sky-50/80 via-white to-cyan-50/60 dark:from-sky-950/40 dark:via-slate-900/60 dark:to-cyan-950/30 border-sky-200/70 dark:border-sky-800/50'
+        : 'from-indigo-50/80 via-white to-purple-50/60 dark:from-indigo-950/40 dark:via-slate-900/60 dark:to-purple-950/30 border-indigo-200/70 dark:border-indigo-800/50';
+    const titleGradient = isWeb
+        ? 'from-sky-600 via-cyan-600 to-teal-600 dark:from-sky-400 dark:via-cyan-400 dark:to-teal-400'
+        : 'from-indigo-600 via-purple-600 to-pink-600 dark:from-indigo-400 dark:via-purple-400 dark:to-pink-400';
+    const icon = isWeb ? '🌐' : '✨';
+    const title = isWeb ? 'Web Research' : 'PerfectSearch AI';
+
     return (
-        <div className="relative rounded-2xl border bg-gradient-to-br from-indigo-50/80 via-white to-purple-50/60 dark:from-indigo-950/40 dark:via-slate-900/60 dark:to-purple-950/30 border-indigo-200/70 dark:border-indigo-800/50 p-5 shadow-sm animate-slide-up">
+        <div className={`relative rounded-2xl border bg-gradient-to-br p-5 shadow-sm animate-slide-up ${containerGradient}`}>
             <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
-                    <span className="text-lg">✨</span>
-                    <span className="font-bold text-sm bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 dark:from-indigo-400 dark:via-purple-400 dark:to-pink-400 bg-clip-text text-transparent">
-                        PerfectSearch AI
+                    <span className="text-lg">{icon}</span>
+                    <span className={`font-bold text-sm bg-gradient-to-r bg-clip-text text-transparent ${titleGradient}`}>
+                        {title}
                     </span>
                     {status === 'streaming' && (
                         <span className="text-[10px] uppercase tracking-wider text-indigo-600 dark:text-indigo-400 font-semibold flex items-center gap-1">
@@ -287,7 +300,7 @@ export default function AIAnswer({ query, results, onCitationClick }) {
                 </div>
             )}
 
-            {status === 'done' && picked.length > 0 && (
+            {status === 'done' && !isWeb && picked.length > 0 && (
                 <div className="mt-4 pt-3 border-t border-indigo-200/60 dark:border-indigo-800/40">
                     <p className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-semibold mb-2">
                         Sources used ({picked.length})
@@ -307,6 +320,35 @@ export default function AIAnswer({ query, results, onCitationClick }) {
                                 <span className="font-bold opacity-70">{i + 1}</span>
                                 <span className="truncate max-w-[180px]">{p.title}</span>
                             </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {status === 'done' && isWeb && webSources.length > 0 && (
+                <div className="mt-4 pt-3 border-t border-sky-200/60 dark:border-sky-800/40">
+                    <p className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-semibold mb-2">
+                        External sources ({webSources.length})
+                    </p>
+                    <div className="flex flex-col gap-1.5">
+                        {webSources.map((s, i) => (
+                            <a
+                                key={`${s.url}-${i}`}
+                                href={s.url}
+                                onClick={(e) => { e.preventDefault(); window.perfectsearch.openLink(s.url); }}
+                                className="group flex items-start gap-2 text-xs p-2 rounded-md
+                                    bg-white/70 dark:bg-slate-800/60
+                                    border border-slate-200 dark:border-slate-700
+                                    hover:border-sky-400 dark:hover:border-sky-500 transition-colors"
+                                title={s.url}
+                            >
+                                <span className="text-[10px] font-bold text-sky-600 dark:text-sky-400 mt-0.5">[{i + 1}]</span>
+                                <div className="flex-1 min-w-0">
+                                    <div className="text-slate-800 dark:text-slate-200 font-medium truncate group-hover:text-sky-700 dark:group-hover:text-sky-300">{s.title || s.url}</div>
+                                    <div className="text-[10px] text-slate-500 dark:text-slate-500 font-mono truncate">{s.url.replace(/^https?:\/\//, '')}</div>
+                                </div>
+                                <span className="text-slate-400 dark:text-slate-500 text-xs">↗</span>
+                            </a>
                         ))}
                     </div>
                 </div>

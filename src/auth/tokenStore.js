@@ -83,6 +83,17 @@ const TokenStore = {
     getActiveAiProvider() {
         return store.get('ai.active') || null;
     },
+
+    // Per-provider model selection. Falls back to the adapter's defaultModel
+    // when the user hasn't explicitly picked one.
+    saveAiModel(providerId, modelId) {
+        if (modelId) store.set(`ai.${providerId}.model`, modelId);
+        else store.delete(`ai.${providerId}.model`);
+    },
+
+    getAiModel(providerId) {
+        return store.get(`ai.${providerId}.model`) || null;
+    },
 };
 
 module.exports = TokenStore;

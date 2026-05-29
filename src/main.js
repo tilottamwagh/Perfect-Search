@@ -1,5 +1,7 @@
 require('dotenv').config();
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, nativeImage } = require('electron');
+const path = require('path');
+const fs = require('fs');
 const { loginSlack, loginConfluence, loginServiceNow, loginAtlassian, loginBox, loginJira, clearPersistentWindow } = require('./auth/session');
 const tokenStore = require('./auth/tokenStore');
 const { search, clearCache } = require('./search/engine');
@@ -12,9 +14,33 @@ if (require('electron-squirrel-startup')) {
 
 const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
+// Resolve the OS-level window/taskbar icon. Electron's BrowserWindow.icon
+// requires a raster image (.ico / .png). The SVG brand mark in assets/ is
+// used everywhere in-app; for the taskbar we look for a packaged PNG/ICO
+// next to it. Drop assets/icon.png (256x256+ recommended) — or icon.ico on
+// Windows — to give the title bar / dock / taskbar the proper artwork.
+function resolveAppIcon() {
+  const candidates = [
+    path.join(__dirname, '..', '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
+    path.join(__dirname, '..', '..', 'assets', 'icon.png'),
+    path.join(process.cwd(), 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
+    path.join(process.cwd(), 'assets', 'icon.png'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        const img = nativeImage.createFromPath(p);
+        if (!img.isEmpty()) return img;
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
 let mainWindow = null;
 
 function createMainWindow() {
+  const icon = resolveAppIcon();
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -22,6 +48,7 @@ function createMainWindow() {
     minHeight: 640,
     title: process.env.APP_NAME || 'PerfectSearch',
     backgroundColor: '#f8fafc',
+    ...(icon ? { icon } : {}),
     webPreferences: {
       preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
@@ -190,7 +217,7 @@ ipcMain.handle('ai:providers', async () => {
   };
 });
 
-ipcMain.handle('ai:saveKey', async (_event, providerId, apiKey) => {
+ipcMain.handle('ai:saveKey', async (_event, providerId, apiKey, modelId) => {
   if (!providerId || !apiKey || typeof apiKey !== 'string' || apiKey.length < 20) {
     return { success: false, error: 'Provider and API key required' };
   }
@@ -199,12 +226,18 @@ ipcMain.handle('ai:saveKey', async (_event, providerId, apiKey) => {
     const probe = await ai.testKey(providerId, apiKey.trim());
     if (!probe.ok) return { success: false, error: probe.error || 'Key did not respond OK' };
     tokenStore.saveAiKey(providerId, apiKey.trim());
-    // If no active provider was set yet, default to the one just configured.
+    if (modelId) tokenStore.saveAiModel(providerId, modelId);
     if (!tokenStore.getActiveAiProvider()) tokenStore.setActiveAiProvider(providerId);
-    return { success: true, model: probe.model };
+    return { success: true, model: modelId || probe.model };
   } catch (error) {
     return { success: false, error: error.message };
   }
+});
+
+ipcMain.handle('ai:saveModel', async (_event, providerId, modelId) => {
+  if (!providerId) return { success: false, error: 'Provider required' };
+  tokenStore.saveAiModel(providerId, modelId);
+  return { success: true };
 });
 
 ipcMain.handle('ai:clearKey', async (_event, providerId) => {
@@ -233,6 +266,22 @@ ipcMain.handle('ai:synthesize', async (event, { requestId, query, results }) => 
     const result = await ai.synthesize({
       query,
       results,
+      onChunk: (delta) => {
+        if (!event.sender.isDestroyed()) event.sender.send(channel, delta);
+      },
+    });
+    return { success: true, data: result };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('ai:synthesizeWeb', async (event, { requestId, query }) => {
+  try {
+    const ai = require('./ai');
+    const channel = `ai:chunk:${requestId}`;
+    const result = await ai.synthesizeWithWeb({
+      query,
       onChunk: (delta) => {
         if (!event.sender.isDestroyed()) event.sender.send(channel, delta);
       },

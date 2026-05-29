@@ -31,13 +31,18 @@ const PROVIDER_BADGE = {
 
 function AiProviderRow({ provider, active, onChange }) {
     const [value, setValue] = React.useState('');
+    const [selectedModel, setSelectedModel] = React.useState(provider.activeModel || provider.defaultModel);
     const [busy, setBusy] = React.useState(false);
     const [msg, setMsg] = React.useState(null);
     const isActive = active === provider.id;
 
+    React.useEffect(() => {
+        setSelectedModel(provider.activeModel || provider.defaultModel);
+    }, [provider.activeModel, provider.defaultModel]);
+
     const save = async () => {
         setBusy(true); setMsg(null);
-        const resp = await window.perfectsearch.saveAiKey(provider.id, value);
+        const resp = await window.perfectsearch.saveAiKey(provider.id, value, selectedModel);
         setBusy(false);
         if (resp.success) {
             setValue(''); setMsg({ ok: true, text: `Saved (${resp.model})` });
@@ -59,6 +64,18 @@ function AiProviderRow({ provider, active, onChange }) {
         onChange();
     };
 
+    const changeModel = async (newModel) => {
+        setSelectedModel(newModel);
+        // If the user already has a key configured, persist the model change
+        // immediately. If not, we'll save it when they save the key.
+        if (provider.configured) {
+            await window.perfectsearch.saveAiModel(provider.id, newModel);
+            setMsg({ ok: true, text: `Model changed to ${newModel}` });
+            setTimeout(() => setMsg(null), 2000);
+            onChange();
+        }
+    };
+
     const gradient = PROVIDER_COLOR[provider.color] || PROVIDER_COLOR.amber;
     const badge = PROVIDER_BADGE[provider.color] || PROVIDER_BADGE.amber;
 
@@ -76,7 +93,11 @@ function AiProviderRow({ provider, active, onChange }) {
                                 ✨ Active
                             </span>
                         )}
-                        <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">{provider.defaultModel}</span>
+                        {provider.supportsWeb && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-sky-100 text-sky-800 dark:bg-sky-500/20 dark:text-sky-300" title="Supports web research">
+                                🌐 web
+                            </span>
+                        )}
                     </div>
                     <p className="text-xs text-slate-500 dark:text-slate-400">{provider.keyHelp}</p>
                     <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">{provider.pricing}</p>
@@ -102,6 +123,24 @@ function AiProviderRow({ provider, active, onChange }) {
                     )}
                 </div>
             </div>
+            {/* Model picker — always visible. Editable both before and after
+                a key is saved, so users can change models on the fly. */}
+            {Array.isArray(provider.models) && provider.models.length > 0 && (
+                <div className="flex items-center gap-2">
+                    <label className="text-[11px] text-slate-500 dark:text-slate-400 font-medium shrink-0">Model</label>
+                    <select
+                        value={selectedModel}
+                        onChange={(e) => changeModel(e.target.value)}
+                        className="flex-1 text-xs font-mono px-2 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-indigo-500 dark:focus:border-indigo-400"
+                    >
+                        {provider.models.map((m) => (
+                            <option key={m.id} value={m.id}>
+                                {m.label} · {m.tier}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+            )}
             {!provider.configured && (
                 <div className="flex gap-2">
                     <input

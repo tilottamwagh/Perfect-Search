@@ -7,6 +7,15 @@ const logger = require('../utils/logger');
 const DEFAULT_MODEL = process.env.OMNISEARCH_GEMINI_MODEL || 'gemini-2.0-flash';
 const API_HOST = 'https://generativelanguage.googleapis.com';
 
+const MODELS = [
+    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash — fast & free, recommended', tier: 'standard', supportsWeb: true },
+    { id: 'gemini-2.0-flash-exp', label: 'Gemini 2.0 Flash (experimental)', tier: 'experimental', supportsWeb: true },
+    { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro — highest quality, slower', tier: 'premium', supportsWeb: true },
+    { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash — proven workhorse', tier: 'standard', supportsWeb: true },
+    { id: 'gemini-1.5-flash-8b', label: 'Gemini 1.5 Flash-8B — smallest, cheapest', tier: 'fast', supportsWeb: false },
+    { id: 'gemini-exp-1206', label: 'Gemini Experimental 1206', tier: 'experimental', supportsWeb: true },
+];
+
 const META = {
     id: 'gemini',
     name: 'Google Gemini',
@@ -15,6 +24,8 @@ const META = {
     keyHelp: 'Get a free key at aistudio.google.com/app/apikey. Generous free tier (1,500 requests/day).',
     pricing: 'free tier · then very cheap',
     defaultModel: DEFAULT_MODEL,
+    models: MODELS,
+    supportsWeb: true,
 };
 
 function gem(apiKey, modelId, endpoint = 'streamGenerateContent') {
@@ -69,22 +80,22 @@ async function* sseLines(resp) {
     }
 }
 
-async function synthesize({ query, results, apiKey, onChunk }) {
+async function synthesize({ query, results, apiKey, onChunk, model }) {
     const picked = selectSources(results);
     if (picked.length === 0) throw new Error('NO_SOURCES');
+    const modelId = model || DEFAULT_MODEL;
 
     const userText = buildUserMessage(query, picked);
-    logger.info('Phase 6', `[gemini] sources=${picked.length} prompt=${userText.length} chars`);
+    logger.info('Phase 6', `[gemini:${modelId}] sources=${picked.length} prompt=${userText.length} chars`);
     const startedAt = Date.now();
 
     const body = {
-        // Gemini's "systemInstruction" is the equivalent of system prompt.
         systemInstruction: { role: 'system', parts: [{ text: SYSTEM_PROMPT }] },
         contents: [{ role: 'user', parts: [{ text: userText }] }],
         generationConfig: { maxOutputTokens: 4096, temperature: 0.4 },
     };
 
-    const resp = await fetch(gem(apiKey, DEFAULT_MODEL, 'streamGenerateContent'), {
+    const resp = await fetch(gem(apiKey, modelId, 'streamGenerateContent'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -108,15 +119,89 @@ async function synthesize({ query, results, apiKey, onChunk }) {
     }
 
     const elapsed = Date.now() - startedAt;
-    logger.success('Phase 6', `[gemini] done in ${elapsed}ms · in=${usage?.promptTokenCount} out=${usage?.candidatesTokenCount}`);
+    logger.success('Phase 6', `[gemini:${modelId}] done in ${elapsed}ms · in=${usage?.promptTokenCount} out=${usage?.candidatesTokenCount}`);
 
     return {
         text: fullText,
         picked,
         usage: usage ? { input_tokens: usage.promptTokenCount, output_tokens: usage.candidatesTokenCount, total_tokens: usage.totalTokenCount } : null,
-        model: DEFAULT_MODEL,
+        model: modelId,
         elapsedMs: elapsed,
     };
 }
 
-module.exports = { META, testKey, synthesize };
+// Web variant: enables Gemini's built-in Google Search grounding. The model
+// runs live searches and returns answers with grounded citations. Free tier
+// supports this on the Flash models.
+async function synthesizeWithWeb({ query, apiKey, onChunk, model }) {
+    const modelId = model || DEFAULT_MODEL;
+    const startedAt = Date.now();
+    logger.info('Phase 6', `[gemini:${modelId}:web] researching "${query}"`);
+
+    const WEB_PROMPT = `You are a research assistant. Search the web for information about: "${query}"
+
+Write a concise markdown summary with:
+1. A one-sentence TL;DR
+2. Key findings as bullet points (4-8 bullets max)
+3. A "Sources" section listing the URLs
+
+Stay focused on what's actually in the search results. Do not speculate.`;
+
+    const body = {
+        contents: [{ role: 'user', parts: [{ text: WEB_PROMPT }] }],
+        tools: [{ google_search: {} }],
+        generationConfig: { maxOutputTokens: 3072, temperature: 0.3 },
+    };
+
+    const resp = await fetch(gem(apiKey, modelId, 'streamGenerateContent'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`Gemini web HTTP ${resp.status}: ${errBody.substring(0, 400)}`);
+    }
+
+    let fullText = '';
+    let usage = null;
+    const webSources = [];
+    const seenUrls = new Set();
+
+    for await (const chunk of sseLines(resp)) {
+        const cand = chunk?.candidates?.[0];
+        const parts = cand?.content?.parts || [];
+        for (const p of parts) {
+            if (typeof p.text === 'string') {
+                fullText += p.text;
+                if (onChunk) try { onChunk(p.text); } catch (_) {}
+            }
+        }
+        // Gemini exposes grounding metadata with the URLs it searched.
+        const grounding = cand?.groundingMetadata;
+        if (grounding?.groundingChunks) {
+            for (const g of grounding.groundingChunks) {
+                const uri = g?.web?.uri;
+                const title = g?.web?.title;
+                if (uri && !seenUrls.has(uri)) {
+                    seenUrls.add(uri);
+                    webSources.push({ title: title || uri, url: uri, snippet: null });
+                }
+            }
+        }
+        if (chunk?.usageMetadata) usage = chunk.usageMetadata;
+    }
+
+    const elapsed = Date.now() - startedAt;
+    logger.success('Phase 6', `[gemini:${modelId}:web] done in ${elapsed}ms · sources=${webSources.length}`);
+
+    return {
+        text: fullText,
+        webSources,
+        usage: usage ? { input_tokens: usage.promptTokenCount, output_tokens: usage.candidatesTokenCount } : null,
+        model: modelId,
+        elapsedMs: elapsed,
+    };
+}
+
+module.exports = { META, testKey, synthesize, synthesizeWithWeb };

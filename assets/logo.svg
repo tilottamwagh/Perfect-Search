@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 256 256" width="256" height="256" xmlns="http://www.w3.org/2000/svg">
+  <title>PerfectSearch — digital brain</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0b1228"/>
+      <stop offset="1" stop-color="#1e1b4b"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.5" r="0.55">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.45"/>
+      <stop offset="0.75" stop-color="#22d3ee" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="stroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#67e8f9"/>
+      <stop offset="1" stop-color="#0ea5e9"/>
+    </linearGradient>
+    <radialGradient id="hot" cx="0.4" cy="0.4" r="0.6">
+      <stop offset="0" stop-color="#fef3c7"/>
+      <stop offset="0.5" stop-color="#fb923c"/>
+      <stop offset="1" stop-color="#c2410c"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+  <ellipse cx="128" cy="132" rx="88" ry="76" fill="url(#halo)"/>
+
+  <path
+    d="M88 72 C64 76 48 96 52 120 C36 132 44 156 64 164 C68 188 96 200 120 188 C132 200 156 196 164 180 C192 188 212 164 204 140 C220 128 212 100 192 96 C184 68 152 56 128 72 C116 60 96 60 88 72 Z"
+    fill="#0ea5e9" fill-opacity="0.08"
+    stroke="url(#stroke)" stroke-width="2.4" stroke-opacity="0.7"/>
+
+  <g stroke="#22d3ee" stroke-width="1.8" stroke-opacity="0.55" fill="none" stroke-linecap="round">
+    <path d="M84 96 Q104 88 120 104"/>
+    <path d="M120 104 Q136 88 156 100"/>
+    <path d="M156 100 Q176 108 184 128"/>
+    <path d="M84 96 Q76 120 92 136"/>
+    <path d="M92 136 Q112 128 120 104"/>
+    <path d="M92 136 Q108 152 120 168"/>
+    <path d="M120 168 Q140 160 152 144"/>
+    <path d="M152 144 Q172 136 184 128"/>
+    <path d="M152 144 Q164 160 156 176"/>
+    <path d="M120 104 L136 128"/>
+    <path d="M136 128 L152 144"/>
+    <path d="M136 128 L120 168"/>
+    <path d="M136 128 Q144 112 156 100"/>
+  </g>
+
+  <g fill="#67e8f9" filter="url(#glow)">
+    <circle cx="84" cy="96" r="4.4"/>
+    <circle cx="120" cy="104" r="4.4"/>
+    <circle cx="156" cy="100" r="4.4"/>
+    <circle cx="184" cy="128" r="4.4"/>
+    <circle cx="92" cy="136" r="4.4"/>
+    <circle cx="136" cy="128" r="5.2"/>
+    <circle cx="120" cy="168" r="4.4"/>
+    <circle cx="152" cy="144" r="4.4"/>
+    <circle cx="156" cy="176" r="4.4"/>
+  </g>
+
+  <g fill="#22d3ee" opacity="0.55">
+    <circle cx="104" cy="120" r="2.2"/>
+    <circle cx="132" cy="152" r="2.2"/>
+    <circle cx="168" cy="112" r="2.2"/>
+    <circle cx="100" cy="160" r="2.2"/>
+    <circle cx="140" cy="88" r="2.2"/>
+    <circle cx="176" cy="152" r="2.2"/>
+  </g>
+
+  <g filter="url(#glow)">
+    <circle cx="136" cy="128" r="8" fill="url(#hot)"/>
+    <circle cx="184" cy="128" r="6.8" fill="url(#hot)"/>
+  </g>
+</svg>

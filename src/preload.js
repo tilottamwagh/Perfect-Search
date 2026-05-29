@@ -22,7 +22,8 @@ contextBridge.exposeInMainWorld('perfectsearch', {
 
     // AI
     getAiProviders: () => ipcRenderer.invoke('ai:providers'),
-    saveAiKey: (providerId, apiKey) => ipcRenderer.invoke('ai:saveKey', providerId, apiKey),
+    saveAiKey: (providerId, apiKey, modelId) => ipcRenderer.invoke('ai:saveKey', providerId, apiKey, modelId),
+    saveAiModel: (providerId, modelId) => ipcRenderer.invoke('ai:saveModel', providerId, modelId),
     clearAiKey: (providerId) => ipcRenderer.invoke('ai:clearKey', providerId),
     setActiveAiProvider: (providerId) => ipcRenderer.invoke('ai:setActive', providerId),
     aiSynthesize: (requestId, query, results, onChunk) => {
@@ -32,6 +33,15 @@ contextBridge.exposeInMainWorld('perfectsearch', {
         };
         ipcRenderer.on(channel, handler);
         return ipcRenderer.invoke('ai:synthesize', { requestId, query, results })
+            .finally(() => ipcRenderer.removeListener(channel, handler));
+    },
+    aiSynthesizeWeb: (requestId, query, onChunk) => {
+        const channel = `ai:chunk:${requestId}`;
+        const handler = (_event, delta) => {
+            try { onChunk(delta); } catch (_) {}
+        };
+        ipcRenderer.on(channel, handler);
+        return ipcRenderer.invoke('ai:synthesizeWeb', { requestId, query })
             .finally(() => ipcRenderer.removeListener(channel, handler));
     },
 });
