@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PerfectSearch</title>
+    <script>
+        // Apply saved theme as early as possible to avoid a flash of wrong
+        // colors when the renderer first mounts.
+        (function () {
+            try {
+                var pref = localStorage.getItem('perfectsearch:theme') || 'system';
+                var sysDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                var useDark = pref === 'dark' || (pref === 'system' && sysDark);
+                if (useDark) document.documentElement.classList.add('dark');
+            } catch (e) { /* localStorage unavailable */ }
+        })();
+    </script>
+    <style>
+        html, body { background: #f8fafc; }
+        html.dark, html.dark body { background: #020617; }
+    </style>
+</head>
+
+<body>
+    <div id="root"></div>
+</body>
+
+</html>
