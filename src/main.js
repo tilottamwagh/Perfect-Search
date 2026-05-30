@@ -10,7 +10,7 @@ const url = require('url');
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true } },
 ]);
-const { loginSlack, loginConfluence, loginServiceNow, loginAtlassian, loginBox, loginJira, loginResources, clearPersistentWindow } = require('./auth/session');
+const { loginSlack, loginConfluence, loginServiceNow, loginAtlassian, loginBox, loginJira, loginResources, loginDatadog, loginAws, clearPersistentWindow } = require('./auth/session');
 const tokenStore = require('./auth/tokenStore');
 const { search, clearCache } = require('./search/engine');
 const { buildIndex } = require('./connectors/website');
@@ -207,6 +207,26 @@ ipcMain.handle('auth:login:resources', async () => {
   }
 });
 
+ipcMain.handle('auth:login:datadog', async () => {
+  try {
+    const data = await loginDatadog();
+    clearCache();
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('auth:login:aws', async () => {
+  try {
+    const data = await loginAws();
+    clearCache();
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('auth:logout', async (_event, source) => {
   tokenStore.clear(source);
   clearPersistentWindow(source);
@@ -256,6 +276,8 @@ ipcMain.handle('source:listConfigs', async () => {
       jira: tokenStore.getSourceConfig('jira') || {},
       box: tokenStore.getSourceConfig('box') || {},
       resources: tokenStore.getSourceConfig('resources') || {},
+      datadog: tokenStore.getSourceConfig('datadog') || {},
+      aws: tokenStore.getSourceConfig('aws') || {},
       website: tokenStore.getSourceConfig('website') || {},
     },
   };

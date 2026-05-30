@@ -33,6 +33,18 @@ const URL_SOURCES = [
         placeholder: 'https://yourcompany.app.box.com',
         help: 'Your Box enterprise URL (leave blank for box.com default).',
     },
+    {
+        id: 'datadog',
+        label: 'Datadog',
+        placeholder: 'https://app.datadoghq.com',
+        help: 'Your Datadog org URL — varies by region (datadoghq.com / datadoghq.eu / us3.datadoghq.com / etc.).',
+    },
+    {
+        id: 'aws',
+        label: 'AWS SSO start URL',
+        placeholder: 'https://d-XXXXXXXX.awsapps.com/start/',
+        help: 'Your IAM Identity Center start URL — find it in the Identity Center settings or your existing AWS-SSO bookmark.',
+    },
 ];
 
 export default function SettingsPanel({ reindexing, onReindex }) {

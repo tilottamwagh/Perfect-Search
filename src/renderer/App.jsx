@@ -9,11 +9,11 @@ import Logo from './components/Logo';
 import { useTheme } from './hooks/useTheme';
 import { welcomeConfetti } from './utils/confetti';
 
-const SOURCE_FILTERS = ['All', 'Slack', 'Confluence', 'ServiceNow', 'Atlassian', 'Box', 'Jira', 'Resources'];
+const SOURCE_FILTERS = ['All', 'Slack', 'Confluence', 'ServiceNow', 'Atlassian', 'Box', 'Jira', 'Resources', 'Datadog', 'AWS'];
 
 export default function App() {
     const { preference: themePref, cycle: cycleTheme } = useTheme();
-    const [authStatus, setAuthStatus] = useState({ slack: false, confluence: false, servicenow: false, atlassian: false, box: false, jira: false, resources: false });
+    const [authStatus, setAuthStatus] = useState({ slack: false, confluence: false, servicenow: false, atlassian: false, box: false, jira: false, resources: false, datadog: false, aws: false });
     const [results, setResults] = useState([]);
     const [sourceStats, setSourceStats] = useState({});
     const [errors, setErrors] = useState({});

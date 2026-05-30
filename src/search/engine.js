@@ -6,6 +6,8 @@ const { searchAtlassian } = require('../connectors/atlassian');
 const { searchBox } = require('../connectors/box');
 const { searchJira } = require('../connectors/jira');
 const { searchResources } = require('../connectors/resources');
+const { searchDatadog } = require('../connectors/datadog');
+const { searchAws } = require('../connectors/aws');
 const { searchWebsite } = require('../connectors/website');
 const tokenStore = require('../auth/tokenStore');
 const logger = require('../utils/logger');
@@ -114,13 +116,15 @@ async function search(query, options = {}) {
         box: options.box !== false && status.box,
         jira: options.jira !== false && status.jira,
         resources: options.resources !== false && status.resources,
+        datadog: options.datadog !== false && status.datadog,
+        aws: options.aws !== false && status.aws,
         website: options.website !== false,
     };
 
     logger.info('Phase 4', `Unified search for "${trimmed}"`);
     const startedAt = Date.now();
 
-    const [slackRes, confRes, snowRes, atlRes, boxRes, jiraRes, resRes, webRes] = await Promise.allSettled([
+    const [slackRes, confRes, snowRes, atlRes, boxRes, jiraRes, resRes, ddRes, awsRes, webRes] = await Promise.allSettled([
         sourcesToSearch.slack ? searchSlack(trimmed) : Promise.resolve([]),
         sourcesToSearch.confluence ? searchConfluence(trimmed) : Promise.resolve([]),
         sourcesToSearch.servicenow ? searchServiceNow(trimmed) : Promise.resolve([]),
@@ -128,6 +132,8 @@ async function search(query, options = {}) {
         sourcesToSearch.box ? searchBox(trimmed) : Promise.resolve([]),
         sourcesToSearch.jira ? searchJira(trimmed) : Promise.resolve([]),
         sourcesToSearch.resources ? searchResources(trimmed) : Promise.resolve([]),
+        sourcesToSearch.datadog ? searchDatadog(trimmed) : Promise.resolve([]),
+        sourcesToSearch.aws ? searchAws(trimmed) : Promise.resolve([]),
         sourcesToSearch.website ? searchWebsite(trimmed) : Promise.resolve([]),
     ]);
 
@@ -139,6 +145,8 @@ async function search(query, options = {}) {
         ...(boxRes.status === 'fulfilled' ? boxRes.value : []),
         ...(jiraRes.status === 'fulfilled' ? jiraRes.value : []),
         ...(resRes.status === 'fulfilled' ? resRes.value : []),
+        ...(ddRes.status === 'fulfilled' ? ddRes.value : []),
+        ...(awsRes.status === 'fulfilled' ? awsRes.value : []),
         ...(webRes.status === 'fulfilled' ? webRes.value : []),
     ];
 
@@ -152,6 +160,8 @@ async function search(query, options = {}) {
             box: boxRes.status === 'fulfilled' ? boxRes.value.length : 0,
             jira: jiraRes.status === 'fulfilled' ? jiraRes.value.length : 0,
             resources: resRes.status === 'fulfilled' ? resRes.value.length : 0,
+            datadog: ddRes.status === 'fulfilled' ? ddRes.value.length : 0,
+            aws: awsRes.status === 'fulfilled' ? awsRes.value.length : 0,
             website: webRes.status === 'fulfilled' ? webRes.value.length : 0,
         },
         errors: {
@@ -162,6 +172,8 @@ async function search(query, options = {}) {
             box: boxRes.status === 'rejected' ? boxRes.reason?.message : null,
             jira: jiraRes.status === 'rejected' ? jiraRes.reason?.message : null,
             resources: resRes.status === 'rejected' ? resRes.reason?.message : null,
+            datadog: ddRes.status === 'rejected' ? ddRes.reason?.message : null,
+            aws: awsRes.status === 'rejected' ? awsRes.reason?.message : null,
             website: webRes.status === 'rejected' ? webRes.reason?.message : null,
         },
         total: 0,

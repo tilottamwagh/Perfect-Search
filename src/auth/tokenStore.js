@@ -52,6 +52,8 @@ const TokenStore = {
             box: this.isValid('box'),
             jira: this.isValid('jira'),
             resources: this.isValid('resources'),
+            datadog: this.isValid('datadog'),
+            aws: this.isValid('aws'),
         };
     },
 

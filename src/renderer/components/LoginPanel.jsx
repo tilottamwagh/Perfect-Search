@@ -9,6 +9,8 @@ const SOURCES = [
     { id: 'box', name: 'Box', desc: 'Search files and folders in your Box workspace', color: 'indigo', login: () => window.perfectsearch.loginBox() },
     { id: 'jira', name: 'Jira', desc: 'Search Jira issues, projects, and dashboards', color: 'cyan', login: () => window.perfectsearch.loginJira() },
     { id: 'resources', name: 'Ellucian Resources', desc: 'Search the Ellucian Resources portal — documentation, release notes, and announcements', color: 'amber', login: () => window.perfectsearch.loginResources() },
+    { id: 'datadog', name: 'Datadog', desc: 'Jump into Log Explorer, Live Tail, or dashboards with your query pre-applied', color: 'violet', login: () => window.perfectsearch.loginDatadog() },
+    { id: 'aws', name: 'AWS', desc: 'Search the AWS Console and CloudWatch log groups via IAM Identity Center SSO', color: 'orange', login: () => window.perfectsearch.loginAws() },
 ];
 
 const COLOR = {
@@ -19,6 +21,8 @@ const COLOR = {
     indigo: { ring: 'ring-indigo-500 dark:ring-indigo-400', btn: 'bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600', tag: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-500/20 dark:text-indigo-300' },
     cyan: { ring: 'ring-cyan-500 dark:ring-cyan-400', btn: 'bg-cyan-600 hover:bg-cyan-700 dark:bg-cyan-500 dark:hover:bg-cyan-600', tag: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-500/20 dark:text-cyan-300' },
     amber: { ring: 'ring-amber-500 dark:ring-amber-400', btn: 'bg-amber-600 hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600', tag: 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300' },
+    violet: { ring: 'ring-violet-500 dark:ring-violet-400', btn: 'bg-violet-600 hover:bg-violet-700 dark:bg-violet-500 dark:hover:bg-violet-600', tag: 'bg-violet-100 text-violet-800 dark:bg-violet-500/20 dark:text-violet-300' },
+    orange: { ring: 'ring-orange-500 dark:ring-orange-400', btn: 'bg-orange-600 hover:bg-orange-700 dark:bg-orange-500 dark:hover:bg-orange-600', tag: 'bg-orange-100 text-orange-800 dark:bg-orange-500/20 dark:text-orange-300' },
 };
 
 const PROVIDER_COLOR = {

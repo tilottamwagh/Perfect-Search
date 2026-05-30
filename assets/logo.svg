@@ -1,78 +1,122 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 256 256" width="256" height="256" xmlns="http://www.w3.org/2000/svg">
-  <title>PerfectSearch — digital brain</title>
+  <title>PerfectSearch — Shri Yantra brand mark</title>
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#0b1228"/>
-      <stop offset="1" stop-color="#1e1b4b"/>
-    </linearGradient>
-    <radialGradient id="halo" cx="0.5" cy="0.5" r="0.55">
-      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.45"/>
-      <stop offset="0.75" stop-color="#22d3ee" stop-opacity="0.05"/>
-      <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+    <!-- Deep crimson tile background -->
+    <radialGradient id="bgRad" cx="0.5" cy="0.5" r="0.7">
+      <stop offset="0" stop-color="#7f1d1d"/>
+      <stop offset="1" stop-color="#3f0a0a"/>
     </radialGradient>
-    <linearGradient id="stroke" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#67e8f9"/>
-      <stop offset="1" stop-color="#0ea5e9"/>
-    </linearGradient>
-    <radialGradient id="hot" cx="0.4" cy="0.4" r="0.6">
+
+    <!-- Golden lotus petal fill -->
+    <radialGradient id="petalFill" cx="0.5" cy="0.3" r="0.8">
       <stop offset="0" stop-color="#fef3c7"/>
-      <stop offset="0.5" stop-color="#fb923c"/>
+      <stop offset="0.4" stop-color="#fbbf24"/>
       <stop offset="1" stop-color="#c2410c"/>
     </radialGradient>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="2.5" result="b"/>
-      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+
+    <!-- Soft cream backdrop inside the inner ring -->
+    <radialGradient id="centerFill" cx="0.5" cy="0.5" r="0.55">
+      <stop offset="0" stop-color="#fffbeb"/>
+      <stop offset="0.7" stop-color="#fef3c7"/>
+      <stop offset="1" stop-color="#fcd34d"/>
+    </radialGradient>
+
+    <!-- Bindu glow -->
+    <radialGradient id="bindu" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.5" stop-color="#fde047"/>
+      <stop offset="1" stop-color="#b45309"/>
+    </radialGradient>
+
+    <filter id="petalShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="0.6"/>
     </filter>
   </defs>
 
-  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
-  <ellipse cx="128" cy="132" rx="88" ry="76" fill="url(#halo)"/>
+  <!-- Background tile -->
+  <rect width="256" height="256" rx="32" fill="url(#bgRad)"/>
 
-  <path
-    d="M88 72 C64 76 48 96 52 120 C36 132 44 156 64 164 C68 188 96 200 120 188 C132 200 156 196 164 180 C192 188 212 164 204 140 C220 128 212 100 192 96 C184 68 152 56 128 72 C116 60 96 60 88 72 Z"
-    fill="#0ea5e9" fill-opacity="0.08"
-    stroke="url(#stroke)" stroke-width="2.4" stroke-opacity="0.7"/>
-
-  <g stroke="#22d3ee" stroke-width="1.8" stroke-opacity="0.55" fill="none" stroke-linecap="round">
-    <path d="M84 96 Q104 88 120 104"/>
-    <path d="M120 104 Q136 88 156 100"/>
-    <path d="M156 100 Q176 108 184 128"/>
-    <path d="M84 96 Q76 120 92 136"/>
-    <path d="M92 136 Q112 128 120 104"/>
-    <path d="M92 136 Q108 152 120 168"/>
-    <path d="M120 168 Q140 160 152 144"/>
-    <path d="M152 144 Q172 136 184 128"/>
-    <path d="M152 144 Q164 160 156 176"/>
-    <path d="M120 104 L136 128"/>
-    <path d="M136 128 L152 144"/>
-    <path d="M136 128 L120 168"/>
-    <path d="M136 128 Q144 112 156 100"/>
+  <!-- ========== Bhupura — bright red double-line square with prominent T-gates ========== -->
+  <!-- Outer T-gate protrusions on each cardinal side -->
+  <g fill="none" stroke="#dc2626" stroke-width="3">
+    <!-- North gate -->
+    <path d="M104 22 L104 8 L152 8 L152 22"/>
+    <path d="M112 30 L112 22 L144 22 L144 30" stroke-width="2.2"/>
+    <!-- South gate -->
+    <path d="M104 234 L104 248 L152 248 L152 234"/>
+    <path d="M112 226 L112 234 L144 234 L144 226" stroke-width="2.2"/>
+    <!-- West gate -->
+    <path d="M22 104 L8 104 L8 152 L22 152"/>
+    <path d="M30 112 L22 112 L22 144 L30 144" stroke-width="2.2"/>
+    <!-- East gate -->
+    <path d="M234 104 L248 104 L248 152 L234 152"/>
+    <path d="M226 112 L234 112 L234 144 L226 144" stroke-width="2.2"/>
   </g>
 
-  <g fill="#67e8f9" filter="url(#glow)">
-    <circle cx="84" cy="96" r="4.4"/>
-    <circle cx="120" cy="104" r="4.4"/>
-    <circle cx="156" cy="100" r="4.4"/>
-    <circle cx="184" cy="128" r="4.4"/>
-    <circle cx="92" cy="136" r="4.4"/>
-    <circle cx="136" cy="128" r="5.2"/>
-    <circle cx="120" cy="168" r="4.4"/>
-    <circle cx="152" cy="144" r="4.4"/>
-    <circle cx="156" cy="176" r="4.4"/>
+  <!-- Main bhupura square frames -->
+  <g fill="none" stroke="#dc2626" stroke-width="3">
+    <rect x="22" y="22" width="212" height="212" rx="2"/>
+  </g>
+  <g fill="none" stroke="#fbbf24" stroke-width="1.2">
+    <rect x="28" y="28" width="200" height="200" rx="2"/>
+  </g>
+  <g fill="none" stroke="#dc2626" stroke-width="2">
+    <rect x="34" y="34" width="188" height="188" rx="2"/>
   </g>
 
-  <g fill="#22d3ee" opacity="0.55">
-    <circle cx="104" cy="120" r="2.2"/>
-    <circle cx="132" cy="152" r="2.2"/>
-    <circle cx="168" cy="112" r="2.2"/>
-    <circle cx="100" cy="160" r="2.2"/>
-    <circle cx="140" cy="88" r="2.2"/>
-    <circle cx="176" cy="152" r="2.2"/>
+  <!-- ========== Concentric outer rings (red, like the reference) ========== -->
+  <g fill="none" stroke="#dc2626" stroke-width="1.1">
+    <circle cx="128" cy="128" r="92"/>
+    <circle cx="128" cy="128" r="89" stroke-width="0.7"/>
+    <circle cx="128" cy="128" r="86" stroke-width="1.1"/>
   </g>
 
-  <g filter="url(#glow)">
-    <circle cx="136" cy="128" r="8" fill="url(#hot)"/>
-    <circle cx="184" cy="128" r="6.8" fill="url(#hot)"/>
+  <!-- ========== 16-petal outer lotus — golden petals with orange shadow ========== -->
+  <g transform="translate(128 128)" filter="url(#petalShadow)">
+    <!-- Each petal is an almond shape rendered 16 times at 22.5° spacing -->
+    <g><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
+    <g transform="rotate(22.5)"><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
+    <g transform="rotate(45)"><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
+    <g transform="rotate(67.5)"><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
+    <g transform="rotate(90)"><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
+    <g transform="rotate(112.5)"><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
+    <g transform="rotate(135)"><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
+    <g transform="rotate(157.5)"><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
+    <g transform="rotate(180)"><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
+    <g transform="rotate(202.5)"><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
+    <g transform="rotate(225)"><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
+    <g transform="rotate(247.5)"><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
+    <g transform="rotate(270)"><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
+    <g transform="rotate(292.5)"><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
+    <g transform="rotate(315)"><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
+    <g transform="rotate(337.5)"><path d="M0 -84 Q -11 -68 0 -56 Q 11 -68 0 -84 Z" fill="url(#petalFill)" stroke="#c2410c" stroke-width="0.8"/></g>
   </g>
+
+  <!-- Cream backdrop inside the inner ring -->
+  <circle cx="128" cy="128" r="54" fill="url(#centerFill)"/>
+  <circle cx="128" cy="128" r="54" fill="none" stroke="#c2410c" stroke-width="1.3"/>
+  <circle cx="128" cy="128" r="51" fill="none" stroke="#fbbf24" stroke-width="0.6"/>
+
+  <!-- ========== The nine interlocking triangles — solid filled in alternating colors ========== -->
+  <!-- Five downward triangles (Shakti) — outermost = green, then blue, then purple -->
+  <g stroke="#1e3a8a" stroke-width="1">
+    <polygon points="128,174  78,88  178,88"  fill="#22c55e" fill-opacity="0.55"/>
+    <polygon points="128,164  86,94  170,94"  fill="#3b82f6" fill-opacity="0.55"/>
+    <polygon points="128,154  96,102 160,102" fill="#7c3aed" fill-opacity="0.55"/>
+    <polygon points="128,146  106,112 150,112" fill="#3b82f6" fill-opacity="0.6"/>
+    <polygon points="128,138  116,120 140,120" fill="#7c3aed" fill-opacity="0.7"/>
+  </g>
+
+  <!-- Four upward triangles (Shiva) — outermost = green, then blue, then purple, then pink -->
+  <g stroke="#1e3a8a" stroke-width="1">
+    <polygon points="128,82   78,168  178,168" fill="#22c55e" fill-opacity="0.55"/>
+    <polygon points="128,92   88,162  168,162" fill="#3b82f6" fill-opacity="0.55"/>
+    <polygon points="128,104  100,154 156,154" fill="#7c3aed" fill-opacity="0.6"/>
+    <polygon points="128,114  112,144 144,144" fill="#ec4899" fill-opacity="0.7"/>
+  </g>
+
+  <!-- ========== The Bindu — the central point ========== -->
+  <circle cx="128" cy="128" r="5.5" fill="url(#bindu)" stroke="#b45309" stroke-width="0.6"/>
+  <circle cx="128" cy="128" r="2" fill="#ffffff"/>
 </svg>

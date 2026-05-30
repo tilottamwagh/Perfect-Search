@@ -10,7 +10,9 @@ const SOURCE_CONFIG = {
     Box: { chip: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-500/15 dark:text-indigo-300 dark:ring-1 dark:ring-indigo-500/30', dot: 'bg-indigo-500' },
     Jira: { chip: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-500/15 dark:text-cyan-300 dark:ring-1 dark:ring-cyan-500/30', dot: 'bg-cyan-500' },
     Resources: { chip: 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-1 dark:ring-amber-500/30', dot: 'bg-amber-500' },
-    default: { chip: 'bg-orange-100 text-orange-800 dark:bg-orange-500/15 dark:text-orange-300 dark:ring-1 dark:ring-orange-500/30', dot: 'bg-orange-500' },
+    Datadog: { chip: 'bg-violet-100 text-violet-800 dark:bg-violet-500/15 dark:text-violet-300 dark:ring-1 dark:ring-violet-500/30', dot: 'bg-violet-500' },
+    AWS: { chip: 'bg-orange-100 text-orange-800 dark:bg-orange-500/15 dark:text-orange-300 dark:ring-1 dark:ring-orange-500/30', dot: 'bg-orange-500' },
+    default: { chip: 'bg-slate-100 text-slate-800 dark:bg-slate-500/15 dark:text-slate-300 dark:ring-1 dark:ring-slate-500/30', dot: 'bg-slate-500' },
 };
 
 export default function SourceBadge({ source, type }) {

@@ -532,6 +532,87 @@ async function loginResources() {
     }
 }
 
+// Datadog — SaaS observability. SSO (Okta/SAML/Google) lands the user back
+// on app.datadoghq.com (or their regional host). Same "URL settles on the
+// target domain" detection used by Box/Resources/Jira.
+async function loginDatadog() {
+    logger.info('Phase 2', 'Opening Datadog SSO window');
+    const baseUrl = tokenStore.getSourceUrl('datadog') || process.env.DATADOG_BASE_URL || 'https://app.datadoghq.com';
+    const win = openSSOWindow('datadog', 'Datadog Login', baseUrl);
+
+    try {
+        // Datadog's host varies by region (datadoghq.com / datadoghq.eu /
+        // us3.datadoghq.com). Match the registered suffix "datadoghq".
+        const landingUrl = await waitForUrlOnDomain(win, 'datadoghq', 5);
+
+        const sess = session.fromPartition(getPartition('datadog'));
+        const cookies = await sess.cookies.get({});
+        const portalCookies = cookies.filter((c) => c.domain && /datadoghq/.test(c.domain));
+
+        return finalizeLogin({
+            source: 'datadog',
+            win,
+            successMessage: `Datadog SSO login complete (landed on ${landingUrl})`,
+            tokenData: {
+                landingUrl,
+                cookieHeader: cookieHeaderFrom(portalCookies),
+                baseUrl,
+            },
+        });
+    } catch (error) {
+        logger.error('Phase 2', 'Datadog SSO failed', error);
+        if (!win.isDestroyed()) {
+            win.close();
+        }
+        throw error;
+    }
+}
+
+// AWS — IAM Identity Center (formerly SSO). Each org has a unique start URL
+// like https://d-XXXXXXXX.awsapps.com/start/. After login the user picks a
+// permission set and lands on a *.console.aws.amazon.com console page.
+// We accept either the SSO host or the console host as the "you're in" signal.
+async function loginAws() {
+    logger.info('Phase 2', 'Opening AWS SSO window');
+    const baseUrl = tokenStore.getSourceUrl('aws') || process.env.AWS_SSO_START_URL;
+    if (!baseUrl) {
+        throw new Error('AWS SSO start URL not configured. Open Settings → AWS SSO start URL and enter your IAM Identity Center URL (e.g. https://d-9067bdf2d6.awsapps.com/start/).');
+    }
+    const win = openSSOWindow('aws', 'AWS Login', baseUrl);
+
+    try {
+        // The console.aws.amazon.com landing is the most reliable "fully
+        // authenticated" marker, but the user may stay on the start page if
+        // they only need IAM Identity Center session cookies. Accept either.
+        const landingUrl = await waitForUrlOnDomain(win, 'aws.amazon.com', 5)
+            .catch(() => waitForUrlOnDomain(win, 'awsapps.com', 5));
+
+        const sess = session.fromPartition(getPartition('aws'));
+        const cookies = await sess.cookies.get({});
+        const portalCookies = cookies.filter((c) =>
+            c.domain && (/aws\.amazon\.com$/.test(c.domain) || /awsapps\.com$/.test(c.domain))
+        );
+
+        return finalizeLogin({
+            source: 'aws',
+            win,
+            successMessage: `AWS SSO login complete (landed on ${landingUrl})`,
+            tokenData: {
+                landingUrl,
+                cookieHeader: cookieHeaderFrom(portalCookies),
+                baseUrl,
+                region: tokenStore.getSourceConfig('aws')?.region || 'us-east-1',
+            },
+        });
+    } catch (error) {
+        logger.error('Phase 2', 'AWS SSO failed', error);
+        if (!win.isDestroyed()) {
+            win.close();
+        }
+        throw error;
+    }
+}
+
 async function reauth(source) {
     tokenStore.clear(source);
     switch (source) {
@@ -549,6 +630,10 @@ async function reauth(source) {
             return loginJira();
         case 'resources':
             return loginResources();
+        case 'datadog':
+            return loginDatadog();
+        case 'aws':
+            return loginAws();
         default:
             throw new Error(`Unknown source: ${source}`);
     }
@@ -562,6 +647,8 @@ module.exports = {
     loginBox,
     loginJira,
     loginResources,
+    loginDatadog,
+    loginAws,
     reauth,
     getPersistentWindow,
     clearPersistentWindow,

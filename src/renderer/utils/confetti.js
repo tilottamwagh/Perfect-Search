@@ -12,6 +12,8 @@ const PALETTES = {
     indigo: ['#6366f1', '#818cf8', '#a5b4fc', '#c7d2fe'],
     cyan: ['#06b6d4', '#22d3ee', '#67e8f9', '#a5f3fc'],
     amber: ['#f59e0b', '#fbbf24', '#fcd34d', '#fde68a'],
+    violet: ['#7c3aed', '#8b5cf6', '#a78bfa', '#c4b5fd'],
+    orange: ['#ea580c', '#f97316', '#fb923c', '#fdba74'],
 };
 
 // Electron's renderer CSP blocks blob: workers, which canvas-confetti uses by

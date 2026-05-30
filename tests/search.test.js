@@ -25,6 +25,8 @@ jest.mock('../src/connectors/atlassian', () => ({ searchAtlassian: jest.fn().moc
 jest.mock('../src/connectors/box', () => ({ searchBox: jest.fn().mockResolvedValue([]) }));
 jest.mock('../src/connectors/jira', () => ({ searchJira: jest.fn().mockResolvedValue([]) }));
 jest.mock('../src/connectors/resources', () => ({ searchResources: jest.fn().mockResolvedValue([]) }));
+jest.mock('../src/connectors/datadog', () => ({ searchDatadog: jest.fn().mockResolvedValue([]) }));
+jest.mock('../src/connectors/aws', () => ({ searchAws: jest.fn().mockResolvedValue([]) }));
 
 const tokenStore = require('../src/auth/tokenStore');
 const { search, clearCache } = require('../src/search/engine');
