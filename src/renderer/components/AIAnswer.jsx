@@ -329,11 +329,55 @@ export default function AIAnswer({ query, results, mode = 'internal', onCitation
                 );
             })()}
 
-            {status === 'error' && (
-                <div className="text-sm text-red-700 dark:text-red-300 p-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900">
-                    <strong>AI synthesis failed:</strong> {error}
-                </div>
-            )}
+            {status === 'error' && (() => {
+                // Two known "errors" are really just informational states the
+                // user can act on — render them as soft notices, not red
+                // failures.
+                const msg = String(error || '');
+                const isNoSources = msg === 'NO_SOURCES' || /^NO_SOURCES/.test(msg);
+                const isWebUnsupported = /^WEB_NOT_SUPPORTED/.test(msg);
+
+                if (isNoSources) {
+                    return (
+                        <div className="text-sm text-slate-700 dark:text-slate-300 p-3 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-dashed border-slate-300 dark:border-slate-700">
+                            <p className="mb-1">
+                                <strong>No internal results to synthesize.</strong>
+                            </p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                                Try a broader search term, connect more sources in Settings, or use <strong>Web Research</strong> below if you want a public-web answer.
+                            </p>
+                        </div>
+                    );
+                }
+                if (isWebUnsupported) {
+                    // Strip the "WEB_NOT_SUPPORTED: " prefix from the message.
+                    const detail = msg.replace(/^WEB_NOT_SUPPORTED:\s*/, '');
+                    return (
+                        <div className="text-sm text-slate-700 dark:text-slate-300 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50">
+                            <p className="mb-2">
+                                <strong>Web Research not available with your current AI provider.</strong>
+                            </p>
+                            <p className="text-xs text-slate-600 dark:text-slate-400 mb-2">
+                                {detail || 'OpenAI does not expose a web-search tool. Switch to Anthropic Claude or Google Gemini in Settings to use Web Research.'}
+                            </p>
+                            {onOpenSettings && (
+                                <button
+                                    type="button"
+                                    onClick={onOpenSettings}
+                                    className="text-xs px-2.5 py-1 rounded-md bg-amber-600 hover:bg-amber-500 text-white font-medium transition-colors"
+                                >
+                                    ⚙ Open Settings
+                                </button>
+                            )}
+                        </div>
+                    );
+                }
+                return (
+                    <div className="text-sm text-red-700 dark:text-red-300 p-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900">
+                        <strong>AI synthesis failed:</strong> {error}
+                    </div>
+                );
+            })()}
 
             {(status === 'streaming' || status === 'done') && (
                 <div className="prose-sm max-w-none">

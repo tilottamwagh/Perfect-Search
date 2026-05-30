@@ -4,6 +4,12 @@ import React, { useEffect, useState } from 'react';
 // has no .env, so users must enter these in Settings on first run.
 const URL_SOURCES = [
     {
+        id: 'slack',
+        label: 'Slack workspace URL',
+        placeholder: 'https://yourorg.enterprise.slack.com',
+        help: 'Leave blank for standard Slack (app.slack.com). Enterprise Grid users should enter their org URL, e.g. https://ellucian.enterprise.slack.com — otherwise login may fail to identify your workspace.',
+    },
+    {
         id: 'servicenow',
         label: 'ServiceNow',
         placeholder: 'https://yourcompany.service-now.com',

@@ -263,9 +263,13 @@ describe('Atlassian Connector', () => {
         expect(results[0].link).toContain('text=data+connect+issues');
     });
 
-    it('throws AUTH_EXPIRED when org/cloud IDs are missing', async () => {
+    it('falls back to the generic search URL when org/cloud IDs are missing', async () => {
         tokenStore.save('atlassian', { cookieHeader: 'x=1', baseUrl: 'https://home.atlassian.com' });
-        await expect(searchAtlassian('test')).rejects.toThrow('AUTH_EXPIRED');
+        const results = await searchAtlassian('test');
+        expect(results).toHaveLength(1);
+        // Generic fallback URL — no /o/{orgId}/search?cloudId=... path.
+        expect(results[0].link).toBe('https://home.atlassian.com/search?text=test');
+        expect(results[0].type).toBe('Open in Atlassian (generic)');
     });
 });
 

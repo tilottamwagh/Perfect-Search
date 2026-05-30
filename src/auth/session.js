@@ -134,7 +134,10 @@ async function finalizeLogin({ source, tokenData, win, successMessage, keepAlive
 
 async function loginSlack() {
     logger.info('Phase 2', 'Opening Slack SSO window');
-    const url = process.env.SLACK_WORKSPACE_URL || 'https://app.slack.com';
+    // Priority: user-saved Settings URL > env var > slack.com default. For
+    // Enterprise Grid customers the workspace URL is e.g.
+    // https://yourorg.enterprise.slack.com.
+    const url = tokenStore.getSourceUrl('slack') || process.env.SLACK_WORKSPACE_URL || 'https://app.slack.com';
     const win = openSSOWindow('slack', 'Slack Login', url);
 
     try {
@@ -152,53 +155,65 @@ async function loginSlack() {
       })();`
         );
 
-        // Slack's modern web client doesn't reliably expose window.boot_data.
-        // Try every known source: URL path (/client/{TEAMID}/...), TS.boot_data,
-        // localStorage's localConfig_v2, and finally legacy boot_data globals.
-        const slackIdentity = await extractPageValue(
-            win,
-            `(function () {
+        // The team ID can only be captured AFTER Slack's SPA finishes loading
+        // and navigates to /client/{TEAM}/... — but the `d` cookie arrives
+        // much earlier (during the SAML round-trip). Poll for up to 30s,
+        // re-running the extraction every 1s until we find a team ID or
+        // time out. Without this retry loop, the one-shot extraction we
+        // used to do hit a race where cookies were set but the SPA hadn't
+        // mounted yet, leaving slackTeamId=null and breaking search.
+        const extractScript = `(function () {
+      try {
+        var urlMatch = (location.pathname || '').match(/\\/client\\/([A-Z0-9]+)/);
+        var teamFromUrl = urlMatch ? urlMatch[1] : null;
+        var tsBoot = (window.TS && window.TS.boot_data) || {};
+        var legacy = window.boot_data || window.__BOOT_DATA__ || {};
+        var lcTeamId = null, lcUserId = null;
         try {
-          // 1. URL path is the most reliable post-login source.
-          var urlMatch = (location.pathname || '').match(/\\/client\\/([A-Z0-9]+)/);
-          var teamFromUrl = urlMatch ? urlMatch[1] : null;
-
-          // 2. Modern TS.boot_data (set after the client mounts).
-          var tsBoot = (window.TS && window.TS.boot_data) || {};
-
-          // 3. Legacy boot_data globals.
-          var legacy = window.boot_data || window.__BOOT_DATA__ || {};
-
-          // 4. localStorage state — survives reloads, has team metadata.
-          var lcTeamId = null, lcUserId = null;
-          try {
-            var raw = localStorage.getItem('localConfig_v2');
-            if (raw) {
-              var parsed = JSON.parse(raw);
-              var teams = parsed && parsed.teams ? parsed.teams : null;
-              if (teams) {
-                var ids = Object.keys(teams);
-                if (ids.length > 0) {
-                  lcTeamId = ids[0];
-                  lcUserId = teams[ids[0]].user_id || null;
-                }
+          var raw = localStorage.getItem('localConfig_v2');
+          if (raw) {
+            var parsed = JSON.parse(raw);
+            var teams = parsed && parsed.teams ? parsed.teams : null;
+            if (teams) {
+              var ids = Object.keys(teams);
+              if (ids.length > 0) {
+                lcTeamId = ids[0];
+                lcUserId = teams[ids[0]].user_id || null;
               }
             }
-          } catch (_) {}
+          }
+        } catch (_) {}
+        return {
+          teamId: teamFromUrl || tsBoot.team_id || (tsBoot.team && tsBoot.team.id) || legacy.team_id || (legacy.team && legacy.team.id) || lcTeamId || null,
+          userId: tsBoot.user_id || (tsBoot.user && tsBoot.user.id) || legacy.user_id || (legacy.user && legacy.user.id) || lcUserId || null,
+          href: location.href,
+        };
+      } catch (e) { return { teamId: null, userId: null, error: String(e) }; }
+    })();`;
 
-          return {
-            teamId: teamFromUrl || tsBoot.team_id || (tsBoot.team && tsBoot.team.id) || legacy.team_id || (legacy.team && legacy.team.id) || lcTeamId || null,
-            userId: tsBoot.user_id || (tsBoot.user && tsBoot.user.id) || legacy.user_id || (legacy.user && legacy.user.id) || lcUserId || null,
-          };
-        } catch (e) {
-          return { teamId: null, userId: null, error: String(e) };
-        }
-      })();`,
-            { teamId: null, userId: null }
-        );
+        const slackIdentity = await new Promise((resolve) => {
+            const startedAt = Date.now();
+            const tick = async () => {
+                try {
+                    const info = await extractPageValue(win, extractScript, { teamId: null, userId: null });
+                    if (info && info.teamId) {
+                        resolve(info);
+                        return;
+                    }
+                    if (Date.now() - startedAt > 30000) {
+                        resolve(info || { teamId: null, userId: null });
+                        return;
+                    }
+                    setTimeout(tick, 1000);
+                } catch (_) {
+                    setTimeout(tick, 1000);
+                }
+            };
+            tick();
+        });
 
         if (!slackIdentity?.teamId) {
-            logger.warn('Phase 2', 'Slack team ID could not be extracted — search will fail until user re-logs in to their workspace.');
+            logger.warn('Phase 2', `Slack team ID could not be extracted after 30s (last URL: ${slackIdentity?.href || 'unknown'}). Search will fail until user re-logs in.`);
         } else {
             logger.info('Phase 2', `Slack team ID captured: ${slackIdentity.teamId}`);
         }
