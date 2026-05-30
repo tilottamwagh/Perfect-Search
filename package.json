@@ -1,7 +1,7 @@
 {
   "name": "perfectsearch",
   "productName": "PerfectSearch",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Unified enterprise desktop search across Slack, Confluence, ServiceNow, Atlassian, Box, Jira, and websites — with AI synthesis (Claude / Gemini / OpenAI).",
   "main": ".webpack/main",
   "private": true,

@@ -7,6 +7,9 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 const APP_NAME = 'PerfectSearch';
 const APP_DESCRIPTION = 'Unified enterprise desktop search — Slack, Confluence, ServiceNow, Atlassian, Box, Jira, Resources & web research with AI synthesis.';
 const APP_AUTHOR = 'Tilottam Wagh';
+// Debian/RPM packaging require the maintainer field in `Name <email>` form.
+// Use a noreply address when we don't want to expose a personal one.
+const APP_MAINTAINER = 'Tilottam Wagh <tilwagh@gmail.com>';
 const APP_HOMEPAGE = 'https://github.com/tilottamwagh/Perfect-Search';
 
 const ICONS = {
@@ -28,10 +31,10 @@ module.exports = {
     asar: true,
     // Ship the LICENSE in every package so distros show it in their "About".
     extraResource: [],
-    // Quiet the packaged-app warning shown when no code-signing identity is
-    // configured. Users still get an unsigned-app prompt on first launch on
-    // mac/Windows until certificates are added — documented in BUILD.md.
-    osxSign: false,
+    // `osxSign` is intentionally omitted (not set to false) — current versions
+    // of @electron/osx-sign treat any non-undefined value as "please sign" and
+    // bail when no identity is configured. To enable signing later, set
+    // OSX_SIGN_IDENTITY env var and uncomment a real osxSign config block.
     win32metadata: {
       CompanyName: APP_AUTHOR,
       ProductName: APP_NAME,
@@ -100,10 +103,17 @@ module.exports = {
       config: {
         options: {
           name: 'perfectsearch',
+          // `bin` tells the deb maker the actual filename of the binary
+          // inside the packager output. We set executableName='PerfectSearch'
+          // (mixed case) for Windows/macOS branding, so the Linux maker
+          // would otherwise look for a lowercase 'perfectsearch' file and
+          // fail. Point it at the real name.
+          bin: 'PerfectSearch',
           productName: APP_NAME,
           genericName: 'Enterprise Search',
           description: APP_DESCRIPTION,
-          maintainer: APP_AUTHOR,
+          // Debian's policy requires the maintainer in `Name <email>` form.
+          maintainer: APP_MAINTAINER,
           homepage: APP_HOMEPAGE,
           icon: ICONS.png,
           categories: ['Office', 'Network', 'Utility'],
@@ -118,6 +128,8 @@ module.exports = {
       config: {
         options: {
           name: 'perfectsearch',
+          // Same casing fix as the deb maker — point at the real binary name.
+          bin: 'PerfectSearch',
           productName: APP_NAME,
           genericName: 'Enterprise Search',
           description: APP_DESCRIPTION,
