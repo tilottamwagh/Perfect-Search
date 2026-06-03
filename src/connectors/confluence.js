@@ -30,7 +30,7 @@ async function searchConfluence(query) {
         throw new Error('Confluence not authenticated');
     }
 
-    const maxResults = Number(process.env.MAX_RESULTS_PER_SOURCE || 50);
+    const maxResults = Number(process.env.MAX_RESULTS_PER_SOURCE || 300);
     const timeout = Number(process.env.SEARCH_TIMEOUT_MS || 15000);
     const baseUrl = tokens.baseUrl || process.env.CONFLUENCE_BASE_URL;
     const portalShortcut = buildPortalShortcut(baseUrl, query);

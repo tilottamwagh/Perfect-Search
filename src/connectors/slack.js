@@ -471,7 +471,7 @@ async function searchSlack(query) {
     }
 
     const timeout = Number(process.env.SEARCH_TIMEOUT_MS || 15000);
-    const maxResults = Number(process.env.MAX_RESULTS_PER_SOURCE || 50);
+    const maxResults = Number(process.env.MAX_RESULTS_PER_SOURCE || 300);
     // Roughly split the requested limit between the two modules. The pagination
     // loop inside fetchSlackModule will keep fetching pages until it reaches
     // this target (or hits the last page / safety cap).

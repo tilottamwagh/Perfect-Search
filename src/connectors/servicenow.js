@@ -158,7 +158,7 @@ async function searchServiceNow(query) {
         throw new Error('ServiceNow not authenticated');
     }
 
-    const totalMax = Number(process.env.MAX_RESULTS_PER_SOURCE || 50);
+    const totalMax = Number(process.env.MAX_RESULTS_PER_SOURCE || 300);
     const perTable = Math.ceil(totalMax / 3);
     const timeout = Number(process.env.SEARCH_TIMEOUT_MS || 15000);
     const baseUrl = tokens.baseUrl || process.env.SERVICENOW_BASE_URL;
