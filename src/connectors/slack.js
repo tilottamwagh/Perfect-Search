@@ -387,41 +387,68 @@ async function searchSlack(query) {
             });
             await discoveryWin.loadURL('https://app.slack.com');
 
-            // Poll the URL for up to 20s waiting for /client/{TEAMID}/
+            // Poll the URL + DOM for up to 20s waiting for /client/{TEAMID}/
             const discoveredTeamId = await new Promise((resolve) => {
                 const start = Date.now();
-                const poll = () => {
+                let navigated = false;
+                const poll = async () => {
                     try {
                         const href = discoveryWin.webContents.getURL();
                         const m = href.match(/\/client\/([A-Z0-9]+)/);
                         if (m && m[1]) { resolve(m[1]); return; }
-                        // Also try localStorage as a fallback
-                        discoveryWin.webContents.executeJavaScript(`
+
+                        if (Date.now() - start > 20000) { resolve(null); return; }
+
+                        // Try multiple extraction methods in one JS call
+                        const result = await discoveryWin.webContents.executeJavaScript(`
                             (function(){
                                 try {
+                                    // localStorage
                                     var r = localStorage.getItem('localConfig_v2');
                                     if (r) {
                                         var p = JSON.parse(r);
                                         var ids = p && p.teams ? Object.keys(p.teams) : [];
-                                        return ids.length > 0 ? ids[0] : null;
+                                        if (ids.length > 0) return { teamId: ids[0], src: 'localStorage' };
+                                    }
+                                } catch(_) {}
+                                // DOM scan — workspace selector anchor hrefs
+                                try {
+                                    var anchors = Array.from(document.querySelectorAll('a'));
+                                    for (var i = 0; i < anchors.length; i++) {
+                                        var h = anchors[i].getAttribute('href') || anchors[i].href || '';
+                                        var dm = h.match(/\\/client\\/([A-Z0-9]+)/) || h.match(/[?&]team=([A-Z0-9]+)/);
+                                        if (dm && dm[1]) return { teamId: dm[1], src: 'dom', href: h };
+                                    }
+                                    var el = document.querySelector('[data-team-id],[data-workspace-id]');
+                                    if (el) {
+                                        var tid = el.dataset.teamId || el.dataset.workspaceId;
+                                        if (tid) return { teamId: tid, src: 'data-attr' };
                                     }
                                 } catch(_) {}
                                 return null;
                             })()
-                        `).then((id) => {
-                            if (id) { resolve(id); return; }
-                            if (Date.now() - start > 20000) { resolve(null); return; }
-                            setTimeout(poll, 1000);
-                        }).catch(() => {
-                            if (Date.now() - start > 20000) { resolve(null); return; }
-                            setTimeout(poll, 1000);
-                        });
+                        `);
+
+                        if (result && result.teamId) {
+                            // Found in DOM — if we haven't navigated to the workspace
+                            // yet, do it now so subsequent URL polls also succeed.
+                            if (!navigated && result.src !== 'localStorage') {
+                                navigated = true;
+                                try {
+                                    discoveryWin.loadURL('https://app.slack.com/client/' + result.teamId);
+                                } catch (_) {}
+                            }
+                            resolve(result.teamId);
+                            return;
+                        }
+
+                        setTimeout(poll, 1000);
                     } catch (_) {
-                        if (Date.now() - Date.now() > 20000) { resolve(null); return; }
+                        if (Date.now() - start > 20000) { resolve(null); return; }
                         setTimeout(poll, 1000);
                     }
                 };
-                setTimeout(poll, 1500); // give the SPA a head-start
+                setTimeout(poll, 1500);
             });
 
             if (discoveredTeamId) {

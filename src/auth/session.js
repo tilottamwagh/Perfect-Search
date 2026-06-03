@@ -163,6 +163,15 @@ async function loginSlack() {
         // are confirmed present. This forces Slack's SPA to boot fresh and
         // reliably redirects to /client/{TEAMID}/... within ~2-4 seconds.
         // It's a no-op when the window is already on the workspace page.
+        // Update window title to guide the user — the default Slack page title
+        // "Where work happens | Slack" doesn't tell them what to do. Inject a
+        // visible title bar hint so they know to click the workspace name (not
+        // the "LAUNCH SLACK" button which opens the desktop app instead of
+        // navigating our SSO window).
+        try {
+            win.setTitle('Slack Login — Click your workspace name to connect');
+        } catch (_) {}
+
         try {
             const currentUrl = win.webContents.getURL();
             if (!currentUrl.includes('/client/')) {
@@ -186,10 +195,15 @@ async function loginSlack() {
         // extraction every 1s until we find a team ID or time out.
         const extractScript = `(function () {
       try {
+        // 1. URL path — most reliable once workspace is loaded
         var urlMatch = (location.pathname || '').match(/\\/client\\/([A-Z0-9]+)/);
         var teamFromUrl = urlMatch ? urlMatch[1] : null;
+
+        // 2. Modern TS.boot_data / legacy globals
         var tsBoot = (window.TS && window.TS.boot_data) || {};
         var legacy = window.boot_data || window.__BOOT_DATA__ || {};
+
+        // 3. localStorage localConfig_v2
         var lcTeamId = null, lcUserId = null;
         try {
           var raw = localStorage.getItem('localConfig_v2');
@@ -205,8 +219,37 @@ async function loginSlack() {
             }
           }
         } catch (_) {}
+
+        // 4. Workspace selector DOM — when the user is on the "Welcome back"
+        //    picker (multiple workspaces shown), Slack renders anchor tags
+        //    with href="/client/{TEAMID}/..." for each workspace tile. We
+        //    can read the team ID from those links without waiting for the
+        //    user to click, so we can auto-navigate to the right workspace.
+        var teamFromDom = null;
+        try {
+          var anchors = Array.from(document.querySelectorAll('a'));
+          for (var i = 0; i < anchors.length; i++) {
+            var href = anchors[i].getAttribute('href') || anchors[i].href || '';
+            var dm = href.match(/\\/client\\/([A-Z0-9]+)/) ||
+                     href.match(/[?&]team=([A-Z0-9]+)/);
+            if (dm && dm[1]) { teamFromDom = dm[1]; break; }
+          }
+          // Also check data-team-id / data-workspace-id attributes
+          if (!teamFromDom) {
+            var el = document.querySelector('[data-team-id],[data-workspace-id],[data-team]');
+            if (el) teamFromDom = el.dataset.teamId || el.dataset.workspaceId || el.dataset.team || null;
+          }
+          // If found in DOM but user hasn't navigated yet, auto-navigate
+          if (teamFromDom && !teamFromUrl) {
+            var targetUrl = 'https://app.slack.com/client/' + teamFromDom;
+            if (location.href.indexOf('/client/') === -1) {
+              location.href = targetUrl;
+            }
+          }
+        } catch (_) {}
+
         return {
-          teamId: teamFromUrl || tsBoot.team_id || (tsBoot.team && tsBoot.team.id) || legacy.team_id || (legacy.team && legacy.team.id) || lcTeamId || null,
+          teamId: teamFromUrl || tsBoot.team_id || (tsBoot.team && tsBoot.team.id) || legacy.team_id || (legacy.team && legacy.team.id) || lcTeamId || teamFromDom || null,
           userId: tsBoot.user_id || (tsBoot.user && tsBoot.user.id) || legacy.user_id || (legacy.user && legacy.user.id) || lcUserId || null,
           href: location.href,
         };
