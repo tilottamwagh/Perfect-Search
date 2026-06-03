@@ -147,6 +147,30 @@ async function loginSlack() {
             requiredNames: ['d'],
         });
 
+        // ── CRITICAL packaged-app fix ────────────────────────────────────────
+        // When the user is ALREADY logged into the Slack partition (session
+        // from a previous login), the `d` cookie exists immediately and
+        // `waitForCookies` returns at once — before the SPA has had a chance
+        // to navigate to /client/{TEAMID}/...
+        //
+        // In dev mode this is fine because webpack-dev-server keeps things
+        // fast. In the packaged app (asar overhead, cold start) the SPA takes
+        // 3–6 extra seconds to mount, so the 30-second poll below often
+        // completes before Slack navigates to the workspace URL, leaving
+        // slackTeamId=null in the saved token.
+        //
+        // Fix: explicitly (re-)navigate to app.slack.com right after cookies
+        // are confirmed present. This forces Slack's SPA to boot fresh and
+        // reliably redirects to /client/{TEAMID}/... within ~2-4 seconds.
+        // It's a no-op when the window is already on the workspace page.
+        try {
+            const currentUrl = win.webContents.getURL();
+            if (!currentUrl.includes('/client/')) {
+                logger.info('Phase 2', 'Navigating Slack window to app.slack.com to force /client/{TEAMID}/ redirect');
+                win.loadURL('https://app.slack.com');
+            }
+        } catch (_) { /* ignore if window is mid-navigation */ }
+
         const xoxcToken = await extractPageValue(
             win,
             `(function () {
@@ -157,11 +181,9 @@ async function loginSlack() {
 
         // The team ID can only be captured AFTER Slack's SPA finishes loading
         // and navigates to /client/{TEAM}/... — but the `d` cookie arrives
-        // much earlier (during the SAML round-trip). Poll for up to 30s,
-        // re-running the extraction every 1s until we find a team ID or
-        // time out. Without this retry loop, the one-shot extraction we
-        // used to do hit a race where cookies were set but the SPA hadn't
-        // mounted yet, leaving slackTeamId=null and breaking search.
+        // much earlier (during the SAML round-trip). Poll for up to 45s
+        // (extended from 30s for packaged-app cold-start), re-running the
+        // extraction every 1s until we find a team ID or time out.
         const extractScript = `(function () {
       try {
         var urlMatch = (location.pathname || '').match(/\\/client\\/([A-Z0-9]+)/);
@@ -200,7 +222,7 @@ async function loginSlack() {
                         resolve(info);
                         return;
                     }
-                    if (Date.now() - startedAt > 30000) {
+                    if (Date.now() - startedAt > 45000) {
                         resolve(info || { teamId: null, userId: null });
                         return;
                     }

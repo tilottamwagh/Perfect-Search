@@ -366,13 +366,81 @@ async function searchSlack(query) {
     }
 
     let teamId = tokens.slackTeamId || process.env.SLACK_TEAM_ID;
-    // Self-heal: if the saved token is missing the team ID (older builds
-    // didn't capture it reliably), try to pull it from the persistent SSO
-    // window's cookies. Slack's `d-s` cookie is per-team but doesn't carry
-    // the ID; the easiest path is to ask the user to disconnect+reconnect.
+
+    // Self-heal: if the saved token is missing the team ID (common in the
+    // packaged app when the user was already logged in and the SPA hadn't
+    // navigated to /client/{TEAMID}/ yet before our extraction ran), open a
+    // temporary hidden window and discover the team ID from the URL before
+    // proceeding. Once found, we persist it so subsequent searches are fast.
     if (!teamId) {
-        // Surface a friendlier, actionable message instead of just "re-login".
-        throw new Error('Slack workspace not identified. In Settings, click Disconnect on the Slack card, then Connect again — make sure you fully load your workspace (the page where you see channels) before the SSO window closes.');
+        logger.info('Phase 3', 'slackTeamId missing — attempting live discovery via hidden window');
+        let discoveryWin = null;
+        try {
+            discoveryWin = new BrowserWindow({
+                show: false,
+                autoHideMenuBar: true,
+                webPreferences: {
+                    nodeIntegration: false,
+                    contextIsolation: true,
+                    partition: SLACK_PARTITION,
+                },
+            });
+            await discoveryWin.loadURL('https://app.slack.com');
+
+            // Poll the URL for up to 20s waiting for /client/{TEAMID}/
+            const discoveredTeamId = await new Promise((resolve) => {
+                const start = Date.now();
+                const poll = () => {
+                    try {
+                        const href = discoveryWin.webContents.getURL();
+                        const m = href.match(/\/client\/([A-Z0-9]+)/);
+                        if (m && m[1]) { resolve(m[1]); return; }
+                        // Also try localStorage as a fallback
+                        discoveryWin.webContents.executeJavaScript(`
+                            (function(){
+                                try {
+                                    var r = localStorage.getItem('localConfig_v2');
+                                    if (r) {
+                                        var p = JSON.parse(r);
+                                        var ids = p && p.teams ? Object.keys(p.teams) : [];
+                                        return ids.length > 0 ? ids[0] : null;
+                                    }
+                                } catch(_) {}
+                                return null;
+                            })()
+                        `).then((id) => {
+                            if (id) { resolve(id); return; }
+                            if (Date.now() - start > 20000) { resolve(null); return; }
+                            setTimeout(poll, 1000);
+                        }).catch(() => {
+                            if (Date.now() - start > 20000) { resolve(null); return; }
+                            setTimeout(poll, 1000);
+                        });
+                    } catch (_) {
+                        if (Date.now() - Date.now() > 20000) { resolve(null); return; }
+                        setTimeout(poll, 1000);
+                    }
+                };
+                setTimeout(poll, 1500); // give the SPA a head-start
+            });
+
+            if (discoveredTeamId) {
+                teamId = discoveredTeamId;
+                logger.info('Phase 3', `Slack team ID self-healed: ${teamId}`);
+                // Persist so we don't need to do this again next search.
+                const updated = { ...tokens, slackTeamId: teamId };
+                delete updated.savedAt; // tokenStore.save() will set a fresh one
+                tokenStore.save('slack', updated);
+            }
+        } catch (e) {
+            logger.warn('Phase 3', `Slack team ID discovery failed: ${e.message}`);
+        } finally {
+            if (discoveryWin && !discoveryWin.isDestroyed()) discoveryWin.close();
+        }
+
+        if (!teamId) {
+            throw new Error('Slack workspace not identified. In Settings, click Disconnect on the Slack card, then Connect again — make sure you can see your channels in the login window before it closes.');
+        }
     }
 
     const timeout = Number(process.env.SEARCH_TIMEOUT_MS || 15000);
