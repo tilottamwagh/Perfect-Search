@@ -5,14 +5,22 @@ const logger = require('../utils/logger');
 
 const DEFAULT_MODEL = process.env.OMNISEARCH_ANTHROPIC_MODEL || 'claude-opus-4-7';
 
-// Curated list of currently-available Anthropic models. Updated April 2026.
+// Curated list of currently-available Anthropic models. Updated June 2026.
 const MODELS = [
-    { id: 'claude-opus-4-7', label: 'Claude Opus 4.7 — newest flagship, best for complex synthesis', tier: 'premium', supportsWeb: true },
+    // Current 4.7 family
+    { id: 'claude-opus-4-7', label: 'Claude Opus 4.7 — flagship, top reasoning', tier: 'premium', supportsWeb: true },
+    { id: 'claude-sonnet-4-7', label: 'Claude Sonnet 4.7 — best price/performance', tier: 'standard', supportsWeb: true },
+    { id: 'claude-haiku-4-7', label: 'Claude Haiku 4.7 — fastest, cheapest current-gen', tier: 'fast', supportsWeb: true },
+    // 4.6 family — still widely used
     { id: 'claude-opus-4-6', label: 'Claude Opus 4.6 — previous flagship', tier: 'premium', supportsWeb: true },
-    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 — best price/performance balance', tier: 'standard', supportsWeb: true },
-    { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 — fastest & cheapest', tier: 'fast', supportsWeb: true },
+    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 — proven workhorse', tier: 'standard', supportsWeb: true },
+    { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 — stable cheap option', tier: 'fast', supportsWeb: true },
+    // 4.5 legacy
     { id: 'claude-opus-4-5', label: 'Claude Opus 4.5 — legacy', tier: 'legacy', supportsWeb: true },
     { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5 — legacy', tier: 'legacy', supportsWeb: true },
+    // 3.x legacy (long context, cheap)
+    { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet — legacy, very cheap', tier: 'legacy', supportsWeb: false },
+    { id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku — legacy, cheapest', tier: 'legacy', supportsWeb: false },
 ];
 
 const META = {

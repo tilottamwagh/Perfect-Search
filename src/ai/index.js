@@ -1,10 +1,15 @@
 const anthropic = require('./anthropic');
 const gemini = require('./gemini');
 const openai = require('./openai');
+const agentrouter = require('./agentrouter');
 const tokenStore = require('../auth/tokenStore');
 
-const PROVIDERS = { anthropic, gemini, openai };
-const ORDER = ['anthropic', 'gemini', 'openai'];
+const PROVIDERS = { anthropic, gemini, openai, agentrouter };
+// Order controls the auto-fallback chain when no provider is explicitly
+// selected: pick the first one with a saved key. Anthropic and Gemini come
+// first because they support Web Research; the OpenAI-compat providers
+// (OpenAI itself, Agent Router) come after.
+const ORDER = ['anthropic', 'gemini', 'openai', 'agentrouter'];
 
 function listProviders() {
     return ORDER.map((id) => {

@@ -2,18 +2,23 @@ require('dotenv').config();
 const { SYSTEM_PROMPT, selectSources, buildUserMessage } = require('./prompt');
 const logger = require('../utils/logger');
 
-// `gemini-2.0-flash` is generally-available and on Google's free tier
-// (~15 RPM / 1,500 requests per day at the time of writing). Override via env.
-const DEFAULT_MODEL = process.env.OMNISEARCH_GEMINI_MODEL || 'gemini-2.0-flash';
+// `gemini-2.5-flash` is the current default — fast, free tier, and supports
+// Google Search grounding. The older `gemini-2.0-flash` alias was retired by
+// Google in 2026; users hit "no longer available" 404s. Override via env.
+const DEFAULT_MODEL = process.env.OMNISEARCH_GEMINI_MODEL || 'gemini-2.5-flash';
 const API_HOST = 'https://generativelanguage.googleapis.com';
 
 const MODELS = [
-    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash — fast & free, recommended', tier: 'standard', supportsWeb: true },
-    { id: 'gemini-2.0-flash-exp', label: 'Gemini 2.0 Flash (experimental)', tier: 'experimental', supportsWeb: true },
-    { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro — highest quality, slower', tier: 'premium', supportsWeb: true },
-    { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash — proven workhorse', tier: 'standard', supportsWeb: true },
-    { id: 'gemini-1.5-flash-8b', label: 'Gemini 1.5 Flash-8B — smallest, cheapest', tier: 'fast', supportsWeb: false },
-    { id: 'gemini-exp-1206', label: 'Gemini Experimental 1206', tier: 'experimental', supportsWeb: true },
+    // Current Gemini 2.5 family
+    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro — top reasoning, premium', tier: 'premium', supportsWeb: true },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — fast & free, recommended', tier: 'standard', supportsWeb: true },
+    { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite — cheapest, fastest', tier: 'fast', supportsWeb: true },
+    // Gemini 2.0 — pin to dated stable build (the bare 2.0-flash alias was retired)
+    { id: 'gemini-2.0-flash-001', label: 'Gemini 2.0 Flash 001 — proven stable', tier: 'standard', supportsWeb: true },
+    { id: 'gemini-2.0-flash-lite-001', label: 'Gemini 2.0 Flash-Lite 001 — cheap legacy', tier: 'fast', supportsWeb: true },
+    // Legacy Gemini 1.5 — pin to dated stable build (bare aliases were retired)
+    { id: 'gemini-1.5-pro-002', label: 'Gemini 1.5 Pro 002 — legacy premium', tier: 'legacy', supportsWeb: true },
+    { id: 'gemini-1.5-flash-002', label: 'Gemini 1.5 Flash 002 — legacy workhorse', tier: 'legacy', supportsWeb: true },
 ];
 
 const META = {

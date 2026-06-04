@@ -28,12 +28,14 @@ const COLOR = {
 const PROVIDER_COLOR = {
     amber: 'from-amber-50/60 via-white to-orange-50/40 dark:from-amber-950/30 dark:via-slate-900/60 dark:to-orange-950/20 border-amber-200/70 dark:border-amber-800/40',
     rose: 'from-rose-50/60 via-white to-pink-50/40 dark:from-rose-950/30 dark:via-slate-900/60 dark:to-pink-950/20 border-rose-200/70 dark:border-rose-800/40',
-    emerald: 'from-emerald-50/60 via-white to-teal-50/40 dark:from-emerald-950/30 dark:via-slate-900/60 dark:to-teal-950/20 border-emerald-200/70 dark:border-emerald-800/40',
+    emerald: 'from-emerald-50/60 via-white to-teal-50/40 dark:from-emerald-950/30 dark:via-slate-900/60 dark:to-emerald-950/20 border-emerald-200/70 dark:border-emerald-800/40',
+    sky: 'from-sky-50/60 via-white to-cyan-50/40 dark:from-sky-950/30 dark:via-slate-900/60 dark:to-cyan-950/20 border-sky-200/70 dark:border-sky-800/40',
 };
 const PROVIDER_BADGE = {
     amber: 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300',
     rose: 'bg-rose-100 text-rose-800 dark:bg-rose-500/20 dark:text-rose-300',
     emerald: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300',
+    sky: 'bg-sky-100 text-sky-800 dark:bg-sky-500/20 dark:text-sky-300',
 };
 
 function AiProviderRow({ provider, active, onChange }) {

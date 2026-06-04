@@ -2,20 +2,36 @@ require('dotenv').config();
 const { SYSTEM_PROMPT, selectSources, buildUserMessage } = require('./prompt');
 const logger = require('../utils/logger');
 
-// `gpt-4o-mini` is OpenAI's cheap workhorse. ~$0.15/M input, $0.60/M output.
-// Override via env if you want gpt-4o or another variant.
-const DEFAULT_MODEL = process.env.OMNISEARCH_OPENAI_MODEL || 'gpt-4o-mini';
+// `gpt-4.1-mini` is the cheap workhorse in 2026 — replaces the older
+// `gpt-4o-mini` as the default sweet-spot. Override via env if you want a
+// different variant.
+const DEFAULT_MODEL = process.env.OMNISEARCH_OPENAI_MODEL || 'gpt-4.1-mini';
 const API_URL = 'https://api.openai.com/v1/chat/completions';
 
+// Curated list of currently-available OpenAI chat-completions models.
+// Updated June 2026. The o-series ("reasoning") models reject `temperature`
+// and use `max_completion_tokens` instead of `max_tokens` — the synthesize
+// function below detects them via the `/^o\d/` pattern.
 const MODELS = [
-    { id: 'gpt-4o', label: 'GPT-4o — top quality, multimodal', tier: 'premium', supportsWeb: false },
-    { id: 'gpt-4o-mini', label: 'GPT-4o mini — very cheap, recommended', tier: 'standard', supportsWeb: false },
-    { id: 'gpt-4.1', label: 'GPT-4.1 — latest flagship (if available)', tier: 'premium', supportsWeb: false },
-    { id: 'gpt-4.1-mini', label: 'GPT-4.1 mini', tier: 'standard', supportsWeb: false },
-    { id: 'gpt-4-turbo', label: 'GPT-4 Turbo — proven legacy', tier: 'legacy', supportsWeb: false },
-    { id: 'o1', label: 'o1 — reasoning model, slower & expensive', tier: 'premium', supportsWeb: false },
-    { id: 'o1-mini', label: 'o1-mini — smaller reasoning model', tier: 'standard', supportsWeb: false },
-    { id: 'o3-mini', label: 'o3-mini — newest small reasoning model', tier: 'standard', supportsWeb: false },
+    // GPT-5 family (current flagship — if your account has access)
+    { id: 'gpt-5', label: 'GPT-5 — current flagship (if available on your account)', tier: 'premium', supportsWeb: false },
+    { id: 'gpt-5-mini', label: 'GPT-5 mini — current sweet spot (if available)', tier: 'standard', supportsWeb: false },
+    { id: 'gpt-5-nano', label: 'GPT-5 nano — current cheapest (if available)', tier: 'fast', supportsWeb: false },
+    // GPT-4.1 family (widely available, recommended default)
+    { id: 'gpt-4.1', label: 'GPT-4.1 — flagship, broad availability', tier: 'premium', supportsWeb: false },
+    { id: 'gpt-4.1-mini', label: 'GPT-4.1 mini — recommended cheap workhorse', tier: 'standard', supportsWeb: false },
+    { id: 'gpt-4.1-nano', label: 'GPT-4.1 nano — cheapest non-reasoning', tier: 'fast', supportsWeb: false },
+    // GPT-4o family — proven, still cost-effective
+    { id: 'gpt-4o', label: 'GPT-4o — proven multimodal flagship', tier: 'standard', supportsWeb: false },
+    { id: 'gpt-4o-mini', label: 'GPT-4o mini — proven cheap option', tier: 'fast', supportsWeb: false },
+    // o-series reasoning models (slower, higher quality on logic / math)
+    { id: 'o4-mini', label: 'o4-mini — newest small reasoning model', tier: 'standard', supportsWeb: false },
+    { id: 'o3', label: 'o3 — full reasoning model', tier: 'premium', supportsWeb: false },
+    { id: 'o3-mini', label: 'o3-mini — smaller reasoning model', tier: 'standard', supportsWeb: false },
+    // Legacy — still works for users with older configs
+    { id: 'gpt-4-turbo', label: 'GPT-4 Turbo — legacy, proven stable', tier: 'legacy', supportsWeb: false },
+    { id: 'o1', label: 'o1 — legacy reasoning model', tier: 'legacy', supportsWeb: false },
+    { id: 'o1-mini', label: 'o1-mini — legacy small reasoning', tier: 'legacy', supportsWeb: false },
 ];
 
 const META = {
@@ -23,8 +39,8 @@ const META = {
     name: 'OpenAI',
     color: 'emerald',
     keyPrefix: 'sk-',
-    keyHelp: 'Get a key at platform.openai.com/api-keys. Requires billing setup; gpt-4o-mini is very cheap (~$0.003/query).',
-    pricing: 'paid · ~$0.003/query on gpt-4o-mini',
+    keyHelp: 'Get a key at platform.openai.com/api-keys. Requires billing setup; gpt-4.1-mini is the cheap recommended workhorse.',
+    pricing: 'paid · varies per model, see platform.openai.com/docs/pricing',
     defaultModel: DEFAULT_MODEL,
     models: MODELS,
     // OpenAI's chat-completions endpoint doesn't bundle web search server-side.
