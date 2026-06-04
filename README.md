@@ -44,11 +44,30 @@ Citations appear as `[1]`, `[2]` chips — click one to scroll to the cited resu
 - Per-user isolated profiles — no shared state between installs
 - No telemetry
 
+## Downloads
+
+Prebuilt installers for Windows, macOS, and Linux are available on the
+[Releases page](https://github.com/tilottamwagh/Perfect-Search/releases).
+Each release includes:
+
+- `PerfectSearch-Setup.exe` — Windows
+- `PerfectSearch.dmg` — macOS (Apple Silicon)
+- `perfectsearch_<version>_amd64.deb` — Debian / Ubuntu
+- `perfectsearch-<version>.x86_64.rpm` — Fedora / RHEL
+
+### Code signing
+
+Windows installers are signed with a code-signing certificate provided
+free of charge by the [SignPath Foundation](https://signpath.org), using
+the [SignPath.io](https://signpath.io) signing service. This means
+Windows recognises the publisher and Smart App Control / SmartScreen
+will not block the installer.
+
 ## Quick start
 
 ```bash
-git clone https://github.com/<your-org>/perfectsearch.git
-cd perfectsearch
+git clone https://github.com/tilottamwagh/Perfect-Search.git
+cd Perfect-Search
 npm install
 cp .env.example .env       # then edit the URLs to match your instances
 npm start
@@ -183,3 +202,7 @@ MIT — see [LICENSE](./LICENSE).
 ## Acknowledgements
 
 Built with [Claude Code](https://claude.com/claude-code).
+
+Windows code signing for releases is provided free of charge by the
+[SignPath Foundation](https://signpath.org), with certificates managed
+on the [SignPath.io](https://signpath.io) platform.
