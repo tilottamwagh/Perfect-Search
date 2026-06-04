@@ -2,7 +2,7 @@
   "name": "perfectsearch",
   "productName": "PerfectSearch",
   "version": "1.1.5",
-  "description": "Unified enterprise desktop search across Slack, Confluence, ServiceNow, Atlassian, Box, Jira, and websites — with AI synthesis (Claude / Gemini / OpenAI).",
+  "description": "Unified enterprise desktop search across Slack, Confluence, ServiceNow, Atlassian, Box, Jira, Datadog, AWS, and Ellucian Resources — with AI synthesis (Anthropic Claude, Google Gemini, OpenAI).",
   "main": ".webpack/main",
   "private": true,
   "scripts": {
@@ -26,8 +26,9 @@
   },
   "keywords": [],
   "author": {
-    "name": "tilottamwagh",
-    "email": "tilwagh.com"
+    "name": "Tilottam Wagh",
+    "email": "tilwagh@gmail.com",
+    "url": "https://github.com/tilottamwagh"
   },
   "license": "MIT",
   "devDependencies": {
