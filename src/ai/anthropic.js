@@ -50,14 +50,18 @@ async function testKey(apiKey) {
     }
 }
 
-async function synthesize({ query, results, apiKey, onChunk, model }) {
+async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt }) {
     const client = new Anthropic({ apiKey });
     const modelId = model || DEFAULT_MODEL;
     const picked = selectSources(results);
     if (picked.length === 0) throw new Error('NO_SOURCES');
 
     const userText = buildUserMessage(query, picked);
-    logger.info('Phase 6', `[anthropic:${modelId}] sources=${picked.length} prompt=${userText.length} chars`);
+    // Phase-1 agent integration: caller may pass a dynamically-composed
+    // system prompt (intent classification + matching skill). Falls back to
+    // the static SYSTEM_PROMPT when the agent layer is bypassed.
+    const sysText = (systemPrompt && typeof systemPrompt === 'string' && systemPrompt.length > 0) ? systemPrompt : SYSTEM_PROMPT;
+    logger.info('Phase 6', `[anthropic:${modelId}] sources=${picked.length} prompt=${userText.length} chars system=${sysText.length} chars`);
     let fullText = '';
     const startedAt = Date.now();
 
@@ -67,7 +71,7 @@ async function synthesize({ query, results, apiKey, onChunk, model }) {
         model: modelId,
         max_tokens: 4096,
         thinking: { type: 'adaptive', display: 'summarized' },
-        system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+        system: [{ type: 'text', text: sysText, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: userText }],
     });
 
@@ -145,4 +149,19 @@ Keep it focused — 4-8 bullets max. Do NOT speculate beyond what the search res
     return { text: fullText, webSources, usage, model: modelId, elapsedMs: elapsed };
 }
 
-module.exports = { META, testKey, synthesize, synthesizeWithWeb };
+// Lightweight non-streaming chat helper for the agent's intent classifier.
+// Returns the assistant's plain text response (no streaming, no tools, no
+// thinking). Used to keep classification calls cheap and predictable.
+async function chat(systemPrompt, userPrompt, { apiKey, model, maxTokens = 256 } = {}) {
+    const client = new Anthropic({ apiKey });
+    const modelId = model || DEFAULT_MODEL;
+    const resp = await client.messages.create({
+        model: modelId,
+        max_tokens: maxTokens,
+        system: [{ type: 'text', text: systemPrompt }],
+        messages: [{ role: 'user', content: userPrompt }],
+    });
+    return (resp.content || []).find((b) => b.type === 'text')?.text || '';
+}
+
+module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat };

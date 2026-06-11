@@ -97,27 +97,35 @@ async function* sseLines(resp) {
     }
 }
 
-async function synthesize({ query, results, apiKey, onChunk, model }) {
+async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt }) {
     const picked = selectSources(results);
     if (picked.length === 0) throw new Error('NO_SOURCES');
     const modelId = model || DEFAULT_MODEL;
 
     const userText = buildUserMessage(query, picked);
-    logger.info('Phase 6', `[openai:${modelId}] sources=${picked.length} prompt=${userText.length} chars`);
+    // Phase-1 agent integration: caller may pass a dynamically-composed
+    // system prompt. Falls back to the static SYSTEM_PROMPT when the agent
+    // layer is bypassed.
+    const sysText = (systemPrompt && typeof systemPrompt === 'string' && systemPrompt.length > 0) ? systemPrompt : SYSTEM_PROMPT;
+    logger.info('Phase 6', `[openai:${modelId}] sources=${picked.length} prompt=${userText.length} chars system=${sysText.length} chars`);
     const startedAt = Date.now();
 
-    // o-series reasoning models reject `temperature` and use `max_completion_tokens` instead of `max_tokens`.
-    const isOSeries = /^o\d/.test(modelId);
+    // OpenAI's newer model interface uses `max_completion_tokens` and
+    // ignores `temperature`. This applies to ALL of:
+    //   - o-series reasoning models  (o1, o1-mini, o3, o3-mini, o4-mini)
+    //   - gpt-5 family               (gpt-5, gpt-5-mini, gpt-5-nano)
+    // Legacy gpt-4 / gpt-4o family still uses the old `max_tokens` shape.
+    const usesNewParams = /^(o\d|gpt-5)/i.test(modelId);
     const reqBody = {
         model: modelId,
         stream: true,
         stream_options: { include_usage: true },
         messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'system', content: sysText },
             { role: 'user', content: userText },
         ],
     };
-    if (isOSeries) reqBody.max_completion_tokens = 4096;
+    if (usesNewParams) reqBody.max_completion_tokens = 4096;
     else { reqBody.max_tokens = 4096; reqBody.temperature = 0.4; }
 
     const resp = await fetch(API_URL, {
@@ -159,4 +167,34 @@ async function synthesizeWithWeb() {
     throw new Error('WEB_NOT_SUPPORTED: OpenAI chat-completions does not include web search. Switch to Anthropic Claude or Google Gemini in Settings to use Web Research.');
 }
 
-module.exports = { META, testKey, synthesize, synthesizeWithWeb };
+// Lightweight non-streaming chat helper for the agent's intent classifier.
+// Skips streaming + usage tracking — keeps classification calls cheap.
+async function chat(systemPrompt, userPrompt, { apiKey, model, maxTokens = 256 } = {}) {
+    const modelId = model || DEFAULT_MODEL;
+    // Same param-shape detection as synthesize — o-series + gpt-5 family
+    // use max_completion_tokens and ignore temperature.
+    const usesNewParams = /^(o\d|gpt-5)/i.test(modelId);
+    const reqBody = {
+        model: modelId,
+        messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+        ],
+    };
+    if (usesNewParams) reqBody.max_completion_tokens = maxTokens;
+    else { reqBody.max_tokens = maxTokens; reqBody.temperature = 0.1; }
+
+    const resp = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify(reqBody),
+    });
+    if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`OpenAI chat HTTP ${resp.status}: ${errBody.substring(0, 200)}`);
+    }
+    const data = await resp.json();
+    return data?.choices?.[0]?.message?.content || '';
+}
+
+module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat };

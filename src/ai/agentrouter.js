@@ -125,13 +125,17 @@ async function* sseLines(resp) {
     }
 }
 
-async function synthesize({ query, results, apiKey, onChunk, model }) {
+async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt }) {
     const picked = selectSources(results);
     if (picked.length === 0) throw new Error('NO_SOURCES');
     const modelId = model || DEFAULT_MODEL;
 
     const userText = buildUserMessage(query, picked);
-    logger.info('Phase 6', `[agentrouter:${modelId}] sources=${picked.length} prompt=${userText.length} chars`);
+    // Phase-1 agent integration: caller may pass a dynamically-composed
+    // system prompt. Falls back to the static SYSTEM_PROMPT when the agent
+    // layer is bypassed.
+    const sysText = (systemPrompt && typeof systemPrompt === 'string' && systemPrompt.length > 0) ? systemPrompt : SYSTEM_PROMPT;
+    logger.info('Phase 6', `[agentrouter:${modelId}] sources=${picked.length} prompt=${userText.length} chars system=${sysText.length} chars`);
     const startedAt = Date.now();
 
     const reqBody = {
@@ -141,7 +145,7 @@ async function synthesize({ query, results, apiKey, onChunk, model }) {
         max_tokens: 4096,
         temperature: 0.4,
         messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'system', content: sysText },
             { role: 'user', content: userText },
         ],
     };
@@ -190,4 +194,35 @@ async function synthesizeWithWeb() {
     throw new Error('WEB_NOT_SUPPORTED: Agent Router\'s OpenAI-compatible endpoint does not expose a web-search tool. Switch to Anthropic Claude or Google Gemini in Settings to use Web Research.');
 }
 
-module.exports = { META, testKey, synthesize, synthesizeWithWeb };
+// Lightweight non-streaming chat helper for the agent's intent classifier.
+// Reuses the Chromium-routed fetch + browser headers used by synthesize so
+// the same anti-bot bypass applies.
+async function chat(systemPrompt, userPrompt, { apiKey, model, maxTokens = 256 } = {}) {
+    const modelId = model || DEFAULT_MODEL;
+    const reqBody = {
+        model: modelId,
+        max_tokens: maxTokens,
+        temperature: 0.1,
+        messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+        ],
+    };
+    const resp = await chromiumFetch(API_URL, {
+        method: 'POST',
+        headers: {
+            ...BROWSER_HEADERS,
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(reqBody),
+    });
+    if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`Agent Router chat HTTP ${resp.status}: ${errBody.substring(0, 200)}`);
+    }
+    const data = await resp.json();
+    return data?.choices?.[0]?.message?.content || '';
+}
+
+module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat };

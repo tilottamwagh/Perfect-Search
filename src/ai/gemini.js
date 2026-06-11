@@ -41,6 +41,27 @@ function gem(apiKey, modelId, endpoint = 'streamGenerateContent') {
     return `${API_HOST}/v1beta/models/${modelId}:${endpoint}?key=${encodeURIComponent(apiKey)}${sseParam}`;
 }
 
+// Relaxed safety thresholds. The Gemini default is extremely conservative
+// — designed for consumer chat where any mention of harm/violence/etc.
+// must be filtered. For an internal-use enterprise search tool, the
+// content is your own Slack/Confluence/ServiceNow data which routinely
+// contains error codes, security discussion, customer complaints, and
+// internal-sounding language. Without this, the "401 error in Data
+// Connect" query gets blocked because Gemini reads it as "discussion of
+// unauthorized access". We use BLOCK_ONLY_HIGH which still catches
+// genuinely problematic content but lets normal enterprise text through.
+//
+// User can override per-deployment via env var if they need stricter
+// behaviour (e.g. shared multi-tenant install).
+const SAFETY_CATEGORIES = [
+    'HARM_CATEGORY_HARASSMENT',
+    'HARM_CATEGORY_HATE_SPEECH',
+    'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+    'HARM_CATEGORY_DANGEROUS_CONTENT',
+];
+const SAFETY_THRESHOLD = process.env.GEMINI_SAFETY_THRESHOLD || 'BLOCK_ONLY_HIGH';
+const SAFETY_SETTINGS = SAFETY_CATEGORIES.map((category) => ({ category, threshold: SAFETY_THRESHOLD }));
+
 async function testKey(apiKey) {
     try {
         const resp = await fetch(gem(apiKey, DEFAULT_MODEL, 'generateContent'), {
@@ -85,19 +106,24 @@ async function* sseLines(resp) {
     }
 }
 
-async function synthesize({ query, results, apiKey, onChunk, model }) {
+async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt }) {
     const picked = selectSources(results);
     if (picked.length === 0) throw new Error('NO_SOURCES');
     const modelId = model || DEFAULT_MODEL;
 
     const userText = buildUserMessage(query, picked);
-    logger.info('Phase 6', `[gemini:${modelId}] sources=${picked.length} prompt=${userText.length} chars`);
+    // Phase-1 agent integration: caller may pass a dynamically-composed
+    // system prompt (intent classification + matching skill). Falls back to
+    // the static SYSTEM_PROMPT when the agent layer is bypassed.
+    const sysText = (systemPrompt && typeof systemPrompt === 'string' && systemPrompt.length > 0) ? systemPrompt : SYSTEM_PROMPT;
+    logger.info('Phase 6', `[gemini:${modelId}] sources=${picked.length} prompt=${userText.length} chars system=${sysText.length} chars`);
     const startedAt = Date.now();
 
     const body = {
-        systemInstruction: { role: 'system', parts: [{ text: SYSTEM_PROMPT }] },
+        systemInstruction: { role: 'system', parts: [{ text: sysText }] },
         contents: [{ role: 'user', parts: [{ text: userText }] }],
         generationConfig: { maxOutputTokens: 4096, temperature: 0.4 },
+        safetySettings: SAFETY_SETTINGS,
     };
 
     const resp = await fetch(gem(apiKey, modelId, 'streamGenerateContent'), {
@@ -112,10 +138,25 @@ async function synthesize({ query, results, apiKey, onChunk, model }) {
 
     let fullText = '';
     let usage = null;
+    // Capture the final candidate so we can inspect finishReason / safety
+    // ratings if no text comes back. Without this we silently return empty
+    // and the UI hangs on "Reading sources…".
+    let lastCandidate = null;
+    let lastPromptFeedback = null;
+    let chunkCount = 0;
+    let textPartCount = 0;
+    let thoughtPartCount = 0;
     for await (const chunk of sseLines(resp)) {
-        const parts = chunk?.candidates?.[0]?.content?.parts || [];
+        chunkCount++;
+        const cand = chunk?.candidates?.[0];
+        if (cand) lastCandidate = cand;
+        if (chunk?.promptFeedback) lastPromptFeedback = chunk.promptFeedback;
+        const parts = cand?.content?.parts || [];
         for (const p of parts) {
-            if (typeof p.text === 'string') {
+            // Skip "thought" reasoning parts from extended-thinking variants.
+            if (p?.thought) { thoughtPartCount++; continue; }
+            if (typeof p.text === 'string' && p.text.length > 0) {
+                textPartCount++;
                 fullText += p.text;
                 if (onChunk) try { onChunk(p.text); } catch (_) {}
             }
@@ -124,7 +165,51 @@ async function synthesize({ query, results, apiKey, onChunk, model }) {
     }
 
     const elapsed = Date.now() - startedAt;
-    logger.success('Phase 6', `[gemini:${modelId}] done in ${elapsed}ms · in=${usage?.promptTokenCount} out=${usage?.candidatesTokenCount}`);
+
+    // Empty text is a real failure mode — surface it loudly instead of
+    // letting the UI hang on "Reading sources…".
+    if (!fullText) {
+        const finishReason = lastCandidate?.finishReason || 'UNKNOWN';
+        const safety = (lastCandidate?.safetyRatings || [])
+            .filter((r) => r.blocked || r.probability === 'HIGH' || r.probability === 'MEDIUM')
+            .map((r) => `${r.category}:${r.probability}${r.blocked ? '(BLOCKED)' : ''}`)
+            .join(', ');
+        const blockReason = lastPromptFeedback?.blockReason;
+        const blockReasonMsg = lastPromptFeedback?.blockReasonMessage;
+        const promptSafety = (lastPromptFeedback?.safetyRatings || [])
+            .filter((r) => r.blocked || r.probability === 'HIGH' || r.probability === 'MEDIUM')
+            .map((r) => `${r.category}:${r.probability}${r.blocked ? '(BLOCKED)' : ''}`)
+            .join(', ');
+        const shape = JSON.stringify({
+            chunks: chunkCount,
+            textParts: textPartCount,
+            thoughtParts: thoughtPartCount,
+            finishReason,
+            promptFeedback: lastPromptFeedback,
+            partKinds: (lastCandidate?.content?.parts || []).map((p) => Object.keys(p || {})),
+        });
+        logger.warn('Phase 6', `[gemini:${modelId}] empty text in ${elapsed}ms · ${shape}`);
+
+        // Build a precise user-facing error. Distinguish the three failure
+        // modes so the next step is obvious:
+        //   1. zero chunks → connection/quota issue, suggest retry
+        //   2. promptFeedback.blockReason set → input was blocked,
+        //      switch provider (Claude/OpenAI don't have this filter)
+        //   3. finishReason=SAFETY → output was blocked mid-generation
+        let userMsg;
+        if (chunkCount === 0) {
+            userMsg = `Gemini returned an empty response (no data chunks). This is usually a transient connectivity or quota issue — wait a moment and Re-ask, or switch to Anthropic Claude / OpenAI in Settings.`;
+        } else if (blockReason) {
+            userMsg = `Gemini blocked the prompt before answering (block=${blockReason}${blockReasonMsg ? ', "' + blockReasonMsg + '"' : ''}${promptSafety ? ', safety=' + promptSafety : ''}). Enterprise content with error codes / customer names / internal jargon trips Gemini's input filter even with relaxed settings. Switch to Anthropic Claude or OpenAI in Settings for this question — they handle enterprise content without filtering.`;
+        } else if (finishReason === 'SAFETY') {
+            userMsg = `Gemini blocked the answer mid-generation (finishReason=SAFETY${safety ? ', ' + safety : ''}). Switch to Anthropic Claude or OpenAI in Settings.`;
+        } else {
+            userMsg = `Gemini returned no answer text (finishReason=${finishReason}, chunks=${chunkCount}, textParts=${textPartCount}, thoughtParts=${thoughtPartCount}). The combined system + user prompt may be the cause — try a shorter query, or switch to Anthropic Claude / OpenAI in Settings.`;
+        }
+        throw new Error(userMsg);
+    }
+
+    logger.success('Phase 6', `[gemini:${modelId}] done in ${elapsed}ms · in=${usage?.promptTokenCount} out=${usage?.candidatesTokenCount} · ${chunkCount} chunks, ${textPartCount} text parts`);
 
     return {
         text: fullText,
@@ -163,6 +248,10 @@ Stay focused on what's actually in the search results. Do not speculate.`;
     const isLegacy = /^gemini-1\.5/.test(modelId);
     const tool = isLegacy ? { google_search_retrieval: {} } : { google_search: {} };
 
+    // NOTE: do NOT pass safetySettings here — Gemini's grounded-search
+    // endpoint returns HTTP 500 INTERNAL when both `tools` and
+    // `safetySettings` are present together. The Google Search grounding
+    // layer has its own internal safety handling.
     const body = {
         contents: [{ role: 'user', parts: [{ text: WEB_PROMPT }] }],
         tools: [tool],
@@ -251,4 +340,29 @@ Stay focused on what's actually in the search results. Do not speculate.`;
     };
 }
 
-module.exports = { META, testKey, synthesize, synthesizeWithWeb };
+// Lightweight non-streaming chat helper for the agent's intent classifier.
+// Returns the model's plain text response. Skips streaming, grounding, and
+// safety-rating handling — keeps classification calls fast and predictable.
+async function chat(systemPrompt, userPrompt, { apiKey, model, maxTokens = 256 } = {}) {
+    const modelId = model || DEFAULT_MODEL;
+    const body = {
+        systemInstruction: { role: 'system', parts: [{ text: systemPrompt }] },
+        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+        generationConfig: { maxOutputTokens: maxTokens, temperature: 0.1 },
+        safetySettings: SAFETY_SETTINGS,
+    };
+    const resp = await fetch(gem(apiKey, modelId, 'generateContent'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`Gemini chat HTTP ${resp.status}: ${errBody.substring(0, 200)}`);
+    }
+    const data = await resp.json();
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    return parts.map((p) => (typeof p?.text === 'string' ? p.text : '')).join('').trim();
+}
+
+module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat };
