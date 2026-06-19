@@ -89,6 +89,19 @@ function cookieHeaderFrom(cookies) {
     return cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
 }
 
+// Decode the `exp` (epoch seconds → ms) from a JWT cookie value like
+// Atlassian's cloud.session.token. Returns null if it isn't a decodable JWT.
+function jwtExpiryMs(value) {
+    try {
+        const parts = String(value).split('.');
+        if (parts.length < 2) return null;
+        const payload = JSON.parse(Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+        return payload && payload.exp ? payload.exp * 1000 : null;
+    } catch (_) {
+        return null;
+    }
+}
+
 // Some providers (notably Ellucian's ServiceNow) bind a session token to the
 // specific BrowserWindow that created it. Opening a *different* window in the
 // same partition — even with identical cookies — gets redirected straight to
@@ -309,6 +322,21 @@ async function loginSlack() {
 async function loginConfluence() {
     logger.info('Phase 2', 'Opening Confluence SSO window');
     const baseUrl = tokenStore.getSourceUrl('confluence') || process.env.CONFLUENCE_BASE_URL || 'https://your-org.atlassian.net';
+
+    // CRITICAL (stale-session fix): a previous login leaves expired
+    // cloud.session.token / tenant.session.token cookies in the partition. If
+    // we just open the window, `waitForCookies` resolves on those *expired*
+    // cookies instantly and we save a dead session that 403s ("Current user
+    // not permitted to use Confluence"). Wiping the partition cookies first
+    // forces the window through a real SSO that mints fresh cookies.
+    const sess = session.fromPartition(getPartition('confluence'));
+    try {
+        await sess.clearStorageData({ storages: ['cookies'] });
+        logger.info('Phase 2', 'Cleared stale Confluence partition cookies before login');
+    } catch (err) {
+        logger.warn('Phase 2', `Could not clear Confluence cookies: ${err && err.message}`);
+    }
+
     const win = openSSOWindow('confluence', 'Confluence Login', `${baseUrl}/wiki`);
 
     try {
@@ -316,16 +344,62 @@ async function loginConfluence() {
         // `.atlassian.com` domain (NOT the tenant `*.atlassian.net`). Match the
         // broader domain set used by the working Atlassian connector so we
         // actually detect the cookie when SSO completes.
-        const cookies = await waitForCookies({
+        const confluenceDomains = [
+            normalizeDomain(baseUrl),  // ellucian.atlassian.net
+            'atlassian.net',
+            'atlassian.com',           // ← where cloud.session.token actually lives
+            'id.atlassian.com',
+        ];
+        await waitForCookies({
             source: 'confluence',
-            domains: [
-                normalizeDomain(baseUrl),  // ellucian.atlassian.net
-                'atlassian.net',
-                'atlassian.com',           // ← where cloud.session.token actually lives
-                'id.atlassian.com',
-            ],
+            domains: confluenceDomains,
             requiredNames: ['cloud.session.token'],
         });
+
+        // Wait for BOTH (a) a *fresh* (non-expired) cloud.session.token and
+        // (b) the tenant.session.token. cloud.session.token is the org-level
+        // session; Confluence's REST API is authorized by the tenant product
+        // session cookie, set on *.atlassian.net only once the /wiki product
+        // session is established (lags the org cookie). We must not snapshot
+        // until both are present and the session is genuinely fresh.
+        const captureDeadline = Date.now() + 30000;
+        let cookies = [];
+        let hasTenant = false;
+        let fresh = false;
+        do {
+            const all = await sess.cookies.get({});
+            cookies = all.filter((cookie) => cookieMatches(cookie, confluenceDomains));
+            const cloud = cookies.find((cookie) => cookie.name === 'cloud.session.token');
+            hasTenant = cookies.some((cookie) => cookie.name === 'tenant.session.token');
+            const expMs = cloud ? jwtExpiryMs(cloud.value) : null;
+            // Fresh = expiry comfortably in the future. If it isn't a JWT we
+            // can't read exp, so fall back to "present".
+            fresh = expMs ? expMs > Date.now() + 60000 : Boolean(cloud);
+            if (hasTenant && fresh) break;
+            await new Promise((r) => setTimeout(r, 1000));
+        } while (Date.now() < captureDeadline);
+
+        logger.info('Phase 2', `Confluence cookies captured (tenant=${hasTenant ? 'yes' : 'NO'}, fresh=${fresh}): ${cookies.map((c) => c.name).join(', ')}`);
+
+        // Final gate: probe the REST API in-page before saving. Only a 2xx
+        // means the session genuinely works — anything else (esp. 403) means
+        // we'd be saving a broken session, so fail with actionable guidance
+        // instead of silently degrading to the portal shortcut on every search.
+        const probe = await extractPageValue(
+            win,
+            `(async function () {
+                try {
+                    const r = await fetch(${JSON.stringify(baseUrl)} + '/wiki/rest/api/search?cql=' + encodeURIComponent('type=page') + '&limit=1', { credentials: 'include', headers: { 'Accept': 'application/json' } });
+                    return { status: r.status, ok: r.ok };
+                } catch (e) { return { status: 0, error: e && e.message ? e.message : String(e) }; }
+            })();`,
+            { status: 0 }
+        );
+        if (!(probe.status >= 200 && probe.status < 300)) {
+            logger.warn('Phase 2', `Confluence session probe failed (HTTP ${probe.status}) — not saving a broken session`);
+            throw new Error('Confluence sign-in didn\'t establish a working session (the API returned ' + (probe.status || 'no response') + '). Click Connect again and let the window fully load your Confluence home before it closes.');
+        }
+        logger.success('Phase 2', `Confluence session probe OK (HTTP ${probe.status})`);
 
         return finalizeLogin({
             source: 'confluence',
@@ -333,6 +407,7 @@ async function loginConfluence() {
             successMessage: 'Confluence SSO login complete',
             tokenData: {
                 sessionToken: cookies.find((cookie) => cookie.name === 'cloud.session.token')?.value || null,
+                tenantSession: cookies.find((cookie) => cookie.name === 'tenant.session.token')?.value || null,
                 atssession: cookies.find((cookie) => cookie.name === 'atlassian.xsrf.token' || cookie.name === 'ATSSESSION')?.value || null,
                 cookieHeader: cookieHeaderFrom(cookies),
                 baseUrl,
@@ -345,6 +420,60 @@ async function loginConfluence() {
         }
         throw error;
     }
+}
+
+// After ServiceNow cookies appear, the JSESSIONID exists the instant the page
+// loads — even before the user has typed credentials — so cookie presence alone
+// is NOT proof of an authenticated session. ServiceNow tells the truth in the
+// `x-sessionloggedin` response header: `false` means the session is anonymous.
+//
+// Crucially, an anonymous session is the EXPECTED initial state — the user
+// hasn't logged in yet. So we must NOT bail on the first `false`; instead we
+// keep the SSO window open and poll the table API from inside it, waiting for
+// the session to become authenticated as the user completes login. We only
+// give up once `timeoutMs` elapses (login never finished) or the user closes
+// the window. While the page is mid-redirect on the IdP (cross-origin), the
+// in-page fetch simply fails and we keep waiting.
+//
+// Returns { loggedIn, status, timedOut?, aborted? } from the last probe.
+async function probeServiceNowSession(win, baseUrl, { timeoutMs = 120000, intervalMs = 2500 } = {}) {
+    const script = `(async function () {
+        try {
+            const url = ${JSON.stringify(baseUrl)} + '/api/now/table/sys_user?sysparm_limit=1&sysparm_fields=sys_id';
+            const resp = await fetch(url, {
+                method: 'GET',
+                credentials: 'include',
+                headers: { 'Accept': 'application/json', 'X-UserToken': window.g_ck || '' },
+            });
+            return {
+                status: resp.status,
+                ok: resp.ok,
+                // Header is a string 'true'/'false' when present, else null.
+                loggedIn: resp.headers.get('x-sessionloggedin'),
+                hasGCK: typeof window.g_ck === 'string' && window.g_ck.length > 0,
+            };
+        } catch (err) {
+            return { status: 0, ok: false, error: err && err.message ? err.message : String(err) };
+        }
+    })();`;
+
+    const startedAt = Date.now();
+    let last = { status: 0, ok: false, loggedIn: null };
+    while (Date.now() - startedAt < timeoutMs) {
+        // User closed the login window — abort cleanly.
+        if (win.isDestroyed()) {
+            return { loggedIn: false, status: 0, aborted: true };
+        }
+        last = await extractPageValue(win, script, { status: 0, ok: false, loggedIn: null });
+        // Authenticated: API accepted us AND ServiceNow didn't flag the session
+        // as anonymous. (Some endpoints omit the header on success, so treat
+        // "ok and not explicitly false" as logged in.)
+        if (last.ok && last.loggedIn !== 'false') {
+            return { loggedIn: true, status: last.status };
+        }
+        await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    return { loggedIn: false, status: last.status, timedOut: true };
 }
 
 async function loginServiceNow() {
@@ -360,12 +489,35 @@ async function loginServiceNow() {
     const win = openSSOWindow('servicenow', 'ServiceNow Login', baseUrl);
 
     try {
-        const cookies = await waitForCookies({
+        // First wait for JSESSIONID — this only confirms the ServiceNow page
+        // loaded; the session is still anonymous until the user logs in.
+        await waitForCookies({
             source: 'servicenow',
             domains: [normalizeDomain(baseUrl)],
             requiredNames: ['JSESSIONID'],
         });
 
+        // Keep the window open and wait for the user to actually complete login.
+        // The probe polls the API until the session reports authenticated, so we
+        // never save an anonymous session (which would silently 401 on every
+        // later search). Distinct messages tell the user what to do next.
+        const probe = await probeServiceNowSession(win, baseUrl);
+        if (!probe.loggedIn) {
+            if (probe.aborted) {
+                logger.warn('Phase 2', 'ServiceNow login window was closed before sign-in finished');
+                throw new Error('ServiceNow login was cancelled — the window closed before sign-in finished. Click Connect again and sign in fully; the window stays open and closes itself once login completes.');
+            }
+            logger.warn('Phase 2', `ServiceNow session still anonymous after timeout (last status=${probe.status}) — not saving token`);
+            throw new Error('ServiceNow sign-in did not complete in time. Click Connect again and complete your single sign-on (including any MFA) — the window stays open and closes itself automatically once you reach the ServiceNow home screen.');
+        }
+        logger.success('Phase 2', 'ServiceNow session probe confirmed authenticated');
+
+        // Re-read cookies NOW (post-login) — the ones captured above were the
+        // pre-login anonymous set. Pull the csrf/g_ck token too, which only
+        // exists once the authenticated page has rendered.
+        const sess = session.fromPartition(getPartition('servicenow'));
+        const allCookies = await sess.cookies.get({});
+        const cookies = allCookies.filter((cookie) => cookieMatches(cookie, [normalizeDomain(baseUrl)]));
         const csrfToken = await extractPageValue(
             win,
             `(function () {

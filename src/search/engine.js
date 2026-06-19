@@ -183,6 +183,25 @@ async function search(query, options = {}) {
 
     response.total = response.results.length;
 
+    // Harvest per-source degradation notices. Connectors that fall back to a
+    // portal shortcut (e.g. Confluence 403, ServiceNow 401) tag that result
+    // with `_notice` so the failure is visible instead of looking like a
+    // genuine "1 result". Surface it through the existing `errors` channel —
+    // the UI renders non-AUTH_EXPIRED errors as an amber banner. Only fill a
+    // slot that doesn't already hold a real rejection.
+    const settledBySource = {
+        slack: slackRes, confluence: confRes, servicenow: snowRes, atlassian: atlRes,
+        box: boxRes, jira: jiraRes, resources: resRes, datadog: ddRes, aws: awsRes, website: webRes,
+    };
+    for (const [source, settled] of Object.entries(settledBySource)) {
+        if (response.errors[source]) continue;
+        if (settled.status !== 'fulfilled') continue;
+        const noticed = (settled.value || []).find((item) => item && item._notice);
+        if (noticed) {
+            response.errors[source] = noticed._notice;
+        }
+    }
+
     const hasAuthError = Object.values(response.errors).some((error) => error === 'AUTH_EXPIRED');
     const allowCaching = options.slack === false;
 

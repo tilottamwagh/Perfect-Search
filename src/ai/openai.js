@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { SYSTEM_PROMPT, selectSources, buildUserMessage } = require('./prompt');
+const { SYSTEM_PROMPT, CASE_ANALYSIS_SYSTEM_PROMPT, selectSources, buildUserMessage, buildCaseAnalysisText } = require('./prompt');
 const logger = require('../utils/logger');
 
 // `gpt-4.1-mini` is the cheap workhorse in 2026 — replaces the older
@@ -59,7 +59,7 @@ async function testKey(apiKey) {
             },
             body: JSON.stringify({
                 model: DEFAULT_MODEL,
-                max_tokens: 16,
+                max_completion_tokens: 16,
                 messages: [{ role: 'user', content: 'Reply with just the word OK.' }],
             }),
         });
@@ -97,8 +97,9 @@ async function* sseLines(resp) {
     }
 }
 
-async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt }) {
-    const picked = selectSources(results);
+async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt, picked: prePicked }) {
+    // Phase 2: ai/index.js pre-selects + enriches; use that if provided.
+    const picked = Array.isArray(prePicked) ? prePicked : selectSources(results);
     if (picked.length === 0) throw new Error('NO_SOURCES');
     const modelId = model || DEFAULT_MODEL;
 
@@ -110,23 +111,28 @@ async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt
     logger.info('Phase 6', `[openai:${modelId}] sources=${picked.length} prompt=${userText.length} chars system=${sysText.length} chars`);
     const startedAt = Date.now();
 
-    // OpenAI's newer model interface uses `max_completion_tokens` and
-    // ignores `temperature`. This applies to ALL of:
-    //   - o-series reasoning models  (o1, o1-mini, o3, o3-mini, o4-mini)
-    //   - gpt-5 family               (gpt-5, gpt-5-mini, gpt-5-nano)
-    // Legacy gpt-4 / gpt-4o family still uses the old `max_tokens` shape.
-    const usesNewParams = /^(o\d|gpt-5)/i.test(modelId);
+    // Always use `max_completion_tokens` — it's the canonical OpenAI
+    // parameter as of late 2025, supported across every current chat
+    // model (gpt-4-turbo, gpt-4o, gpt-4.1, gpt-5, o-series). The older
+    // `max_tokens` is deprecated and some newer model variants now
+    // reject it outright with a 400. Always sending the new param is
+    // future-proof.
+    //
+    // `temperature` is still tolerated everywhere, but o-series and
+    // gpt-5 family ignore it. Skip sending it for those to avoid any
+    // "unsupported parameter" surprises with future variants.
+    const rejectsTemperature = /^(o\d|gpt-5)/i.test(modelId);
     const reqBody = {
         model: modelId,
         stream: true,
         stream_options: { include_usage: true },
+        max_completion_tokens: 4096,
         messages: [
             { role: 'system', content: sysText },
             { role: 'user', content: userText },
         ],
     };
-    if (usesNewParams) reqBody.max_completion_tokens = 4096;
-    else { reqBody.max_tokens = 4096; reqBody.temperature = 0.4; }
+    if (!rejectsTemperature) reqBody.temperature = 0.4;
 
     const resp = await fetch(API_URL, {
         method: 'POST',
@@ -161,6 +167,69 @@ async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt
     };
 }
 
+// Analyze a single ServiceNow case (the "✨ Analyze case" feature). Multimodal:
+// the case text + knowledge-base context goes as a text part, and any attached
+// screenshots go as image parts so the model can read error dialogs / stack
+// traces. Vision is supported across current OpenAI chat models (gpt-5*,
+// gpt-4.1*, gpt-4o*). Streams the diagnostic write-up via onChunk.
+async function analyzeCase({ caseBundle, kbResults, apiKey, onChunk, model }) {
+    const modelId = model || DEFAULT_MODEL;
+    const text = buildCaseAnalysisText(caseBundle, kbResults);
+    const images = Array.isArray(caseBundle?.images) ? caseBundle.images : [];
+
+    const userContent = [{ type: 'text', text }];
+    for (const img of images) {
+        const mime = img.contentType || 'image/png';
+        userContent.push({ type: 'image_url', image_url: { url: `data:${mime};base64,${img.base64}` } });
+    }
+
+    logger.info('Phase 7', `[openai:${modelId}] analyzeCase prompt=${text.length} chars, images=${images.length}, kb=${(kbResults || []).length}`);
+    const startedAt = Date.now();
+
+    const rejectsTemperature = /^(o\d|gpt-5)/i.test(modelId);
+    const reqBody = {
+        model: modelId,
+        stream: true,
+        stream_options: { include_usage: true },
+        max_completion_tokens: 4096,
+        messages: [
+            { role: 'system', content: CASE_ANALYSIS_SYSTEM_PROMPT },
+            { role: 'user', content: userContent },
+        ],
+    };
+    if (!rejectsTemperature) reqBody.temperature = 0.3;
+
+    const resp = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify(reqBody),
+    });
+    if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`OpenAI HTTP ${resp.status}: ${errBody.substring(0, 400)}`);
+    }
+
+    let fullText = '';
+    let usage = null;
+    for await (const chunk of sseLines(resp)) {
+        const delta = chunk?.choices?.[0]?.delta?.content;
+        if (typeof delta === 'string' && delta.length > 0) {
+            fullText += delta;
+            if (onChunk) try { onChunk(delta); } catch (_) {}
+        }
+        if (chunk?.usage) usage = chunk.usage;
+    }
+
+    const elapsed = Date.now() - startedAt;
+    logger.success('Phase 7', `[openai:${modelId}] analyzeCase done in ${elapsed}ms · in=${usage?.prompt_tokens} out=${usage?.completion_tokens}`);
+    return {
+        text: fullText,
+        usage: usage ? { input_tokens: usage.prompt_tokens, output_tokens: usage.completion_tokens, total_tokens: usage.total_tokens } : null,
+        model: modelId,
+        elapsedMs: elapsed,
+    };
+}
+
 // OpenAI chat-completions has no server-hosted web search. Return a clear
 // "not supported" so the UI can surface a helpful message rather than failing.
 async function synthesizeWithWeb() {
@@ -171,18 +240,19 @@ async function synthesizeWithWeb() {
 // Skips streaming + usage tracking — keeps classification calls cheap.
 async function chat(systemPrompt, userPrompt, { apiKey, model, maxTokens = 256 } = {}) {
     const modelId = model || DEFAULT_MODEL;
-    // Same param-shape detection as synthesize — o-series + gpt-5 family
-    // use max_completion_tokens and ignore temperature.
-    const usesNewParams = /^(o\d|gpt-5)/i.test(modelId);
+    // Always use `max_completion_tokens` — canonical for all current
+    // OpenAI chat models, future-proof, avoids the "unsupported
+    // parameter" 400 when newer model variants drop `max_tokens`.
+    const rejectsTemperature = /^(o\d|gpt-5)/i.test(modelId);
     const reqBody = {
         model: modelId,
+        max_completion_tokens: maxTokens,
         messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
         ],
     };
-    if (usesNewParams) reqBody.max_completion_tokens = maxTokens;
-    else { reqBody.max_tokens = maxTokens; reqBody.temperature = 0.1; }
+    if (!rejectsTemperature) reqBody.temperature = 0.1;
 
     const resp = await fetch(API_URL, {
         method: 'POST',
@@ -197,4 +267,4 @@ async function chat(systemPrompt, userPrompt, { apiKey, model, maxTokens = 256 }
     return data?.choices?.[0]?.message?.content || '';
 }
 
-module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat };
+module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat, analyzeCase };

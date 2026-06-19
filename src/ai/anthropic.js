@@ -50,10 +50,13 @@ async function testKey(apiKey) {
     }
 }
 
-async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt }) {
+async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt, picked: prePicked }) {
     const client = new Anthropic({ apiKey });
     const modelId = model || DEFAULT_MODEL;
-    const picked = selectSources(results);
+    // Phase 2: when ai/index.js has already done selectSources + enrichment,
+    // it passes the pre-selected array as `picked`. Otherwise fall back to
+    // running selectSources here (backward compat for any direct callers).
+    const picked = Array.isArray(prePicked) ? prePicked : selectSources(results);
     if (picked.length === 0) throw new Error('NO_SOURCES');
 
     const userText = buildUserMessage(query, picked);

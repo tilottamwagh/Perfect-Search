@@ -125,8 +125,9 @@ async function* sseLines(resp) {
     }
 }
 
-async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt }) {
-    const picked = selectSources(results);
+async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt, picked: prePicked }) {
+    // Phase 2: ai/index.js pre-selects + enriches; use that if provided.
+    const picked = Array.isArray(prePicked) ? prePicked : selectSources(results);
     if (picked.length === 0) throw new Error('NO_SOURCES');
     const modelId = model || DEFAULT_MODEL;
 

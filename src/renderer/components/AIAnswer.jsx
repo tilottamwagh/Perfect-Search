@@ -447,3 +447,7 @@ export default function AIAnswer({ query, results, mode = 'internal', onCitation
         </div>
     );
 }
+
+// Exported so other panels (e.g. the ServiceNow "Analyze case" result) can
+// render the same Markdown style without duplicating the parser.
+export { renderMarkdown };

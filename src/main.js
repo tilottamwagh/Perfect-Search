@@ -431,6 +431,19 @@ ipcMain.handle('source:getConfig', async (_event, source) => {
   return { success: true, config: tokenStore.getSourceConfig(source) || {} };
 });
 
+// Resolve the *effective* base URL for a source the same way the connectors do:
+// the URL saved on the auth token (set at login) wins, then any Settings config,
+// then the .env fallback. Needed by the renderer to open embedded webviews —
+// getSourceConfig alone misses the common case where the URL only lives on the
+// auth token / env (config.<source> is undefined).
+ipcMain.handle('source:getUrl', async (_event, source) => {
+  if (!source) return { success: false, error: 'Source required' };
+  const tok = tokenStore.get(source);
+  const envKey = `${source.toUpperCase()}_BASE_URL`;
+  const url = (tok && tok.baseUrl) || tokenStore.getSourceUrl(source) || process.env[envKey] || null;
+  return { success: true, url };
+});
+
 ipcMain.handle('source:saveConfig', async (_event, source, config) => {
   if (!source) return { success: false, error: 'Source required' };
   const baseUrl = normalizeBaseUrl(config?.baseUrl);
@@ -575,6 +588,120 @@ ipcMain.handle('ai:synthesizeWeb', async (event, { requestId, query }) => {
       },
     });
     return { success: true, data: result };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// "✨ Analyze case" — collect the case data the embedded ServiceNow webview is
+// showing (record + comments + attachments incl. screenshots), cross-reference
+// the knowledge base, and stream an AI diagnosis. `url` is the webview's current
+// URL (to locate the case); `webContentsId` is the webview's id (fallback when
+// there's no persistent SSO window).
+ipcMain.handle('servicenow:analyzeCase', async (event, { requestId, url, webContentsId }) => {
+  try {
+    const { parseCaseRef, collectCaseBundle } = require('./connectors/servicenow');
+    const sessionMod = require('./auth/session');
+    const ai = require('./ai');
+    const channel = `ai:chunk:${requestId}`;
+    const dv = (v) => (v && typeof v === 'object') ? (v.display_value || v.value || '') : (v == null ? '' : String(v));
+
+    const ref = parseCaseRef(url);
+    if (!ref.sysId) {
+      return { success: false, error: 'Couldn\'t find a case in the current ServiceNow view. Open a specific case (so its URL has a sys_id), then click Analyze case.' };
+    }
+
+    const snTokens = tokenStore.get('servicenow');
+    const baseUrl = (snTokens && snTokens.baseUrl) || process.env.SERVICENOW_BASE_URL;
+    if (!baseUrl) return { success: false, error: 'ServiceNow instance URL not set. Open Settings → ServiceNow URL first.' };
+
+    // Prefer the persistent SSO window (classic UI, has g_ck); fall back to the
+    // embedded webview's webContents — both share the ServiceNow session.
+    let win = sessionMod.getPersistentWindow('servicenow');
+    if (!win && webContentsId != null) {
+      const { webContents } = require('electron');
+      const wc = webContents.fromId(webContentsId);
+      if (wc && !wc.isDestroyed()) win = { webContents: wc };
+    }
+    if (!win) {
+      return { success: false, error: 'ServiceNow isn\'t connected. Open Settings → ServiceNow → Connect, then try again.' };
+    }
+
+    logger.info('Phase 7', `Analyze case requested: ${ref.table || 'sn_customerservice_case'}/${ref.sysId}`);
+    const bundle = await collectCaseBundle(win, baseUrl, ref);
+
+    // Build smarter cross-platform knowledge-base context.
+    // 1. Derive high-signal queries from the case text (error phrases, product +
+    //    feature, core symptom) via the AI, plus the short description itself.
+    // 2. Run those searches in parallel across the platforms (the first also
+    //    hits ServiceNow for KB articles / similar cases; the rest stay on the
+    //    fast text sources to keep it snappy), then merge + dedupe.
+    const shortDesc = dv(bundle.record.short_description) || dv(bundle.record.number);
+    const queryText = [
+      shortDesc,
+      dv(bundle.record.description),
+      `product: ${dv(bundle.record.product)}`,
+      ...(bundle.journal || []).map((j) => (j.value || '')).slice(0, 12),
+      ...(bundle.textFiles || []).map((f) => (f.text || '').slice(0, 800)),
+    ].filter(Boolean).join('\n');
+
+    let queries = await ai.extractCaseQueries(queryText).catch(() => []);
+    if (shortDesc && !queries.some((q) => q.toLowerCase() === shortDesc.toLowerCase())) queries.unshift(shortDesc);
+    if (queries.length === 0) queries = [shortDesc].filter(Boolean);
+    queries = queries.slice(0, 3);
+    logger.info('Phase 7', `KB retrieval queries: ${JSON.stringify(queries)}`);
+
+    let kbResults = [];
+    try {
+      const searches = queries.map((q, i) => search(q, {
+        website: false, datadog: false, aws: false, box: false, jira: false, atlassian: false, resources: false,
+        // Only the primary query pays the (slower) ServiceNow round-trip — it
+        // surfaces KB articles + similar cases without 3× the contention.
+        servicenow: i === 0,
+      }).catch(() => ({ results: [] })));
+      const settled = await Promise.all(searches);
+      const seen = new Set();
+      for (const sr of settled) {
+        for (const r of (sr.results || [])) {
+          if (/Open in /i.test(r.type || '')) continue;
+          const key = (r.link || r.id || '').toLowerCase();
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          kbResults.push(r);
+        }
+      }
+      kbResults = kbResults.slice(0, 18);
+    } catch (err) {
+      logger.warn('Phase 7', `KB cross-reference search failed: ${err.message}`);
+    }
+
+    const result = await ai.analyzeCase({
+      caseBundle: bundle,
+      kbResults,
+      onChunk: (delta) => { if (!event.sender.isDestroyed()) event.sender.send(channel, delta); },
+    });
+
+    return {
+      success: true,
+      data: {
+        ...result,
+        caseNumber: dv(bundle.record.number),
+        taskCount: bundle.taskCount || 0,
+        attachmentCount: bundle.attachmentCount,
+        imagesRead: (bundle.images || []).length,
+        textFilesRead: (bundle.textFiles || []).length,
+        kbCount: kbResults.length,
+        // The numbered sources behind the [N] citations, so the UI can make
+        // them clickable. Order matches the [N] numbering in the prompt.
+        sources: kbResults.map((r, i) => ({
+          n: i + 1,
+          title: r.title || '(untitled)',
+          source: r.source || '',
+          type: r.type || '',
+          link: r.link || '',
+        })),
+      },
+    };
   } catch (error) {
     return { success: false, error: error.message };
   }

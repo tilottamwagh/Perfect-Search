@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('perfectsearch', {
     // Per-connector instance URLs (ServiceNow / Confluence / etc.). Required
     // because the packaged installer has no .env file.
     getSourceConfig: (source) => ipcRenderer.invoke('source:getConfig', source),
+    getSourceUrl: (source) => ipcRenderer.invoke('source:getUrl', source),
     saveSourceConfig: (source, config) => ipcRenderer.invoke('source:saveConfig', source, config),
     listSourceConfigs: () => ipcRenderer.invoke('source:listConfigs'),
 
@@ -51,6 +52,15 @@ contextBridge.exposeInMainWorld('perfectsearch', {
         };
         ipcRenderer.on(channel, handler);
         return ipcRenderer.invoke('ai:synthesizeWeb', { requestId, query })
+            .finally(() => ipcRenderer.removeListener(channel, handler));
+    },
+    analyzeServiceNowCase: (requestId, url, webContentsId, onChunk) => {
+        const channel = `ai:chunk:${requestId}`;
+        const handler = (_event, delta) => {
+            try { onChunk(delta); } catch (_) {}
+        };
+        ipcRenderer.on(channel, handler);
+        return ipcRenderer.invoke('servicenow:analyzeCase', { requestId, url, webContentsId })
             .finally(() => ipcRenderer.removeListener(channel, handler));
     },
 });

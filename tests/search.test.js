@@ -80,6 +80,27 @@ describe('Search Engine', () => {
         expect(result.results.length).toBe(2);
     });
 
+    it('harvests a connector _notice into the per-source errors map', async () => {
+        const { searchConfluence } = require('../src/connectors/confluence');
+
+        searchConfluence.mockResolvedValueOnce([
+            {
+                id: 'confluence-portal-x',
+                source: 'Confluence',
+                title: 'Search in Confluence',
+                link: 'https://confluence.example.com/wiki/search?text=x',
+                score: 1,
+                _notice: 'Confluence REST API access denied (HTTP 403) — your Atlassian role lacks REST API permission.',
+            },
+        ]);
+        tokenStore.save('confluence', { cookieHeader: 'c=1', baseUrl: 'https://confluence.example.com' });
+
+        const result = await search('notice query');
+        expect(result.errors.confluence).toMatch(/HTTP 403/);
+        // The notice must not clobber a source that succeeded cleanly.
+        expect(result.errors.slack).toBeFalsy();
+    });
+
     it('caches results on repeated query', async () => {
         const { searchSlack } = require('../src/connectors/slack');
 

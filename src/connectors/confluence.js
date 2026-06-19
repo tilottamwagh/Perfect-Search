@@ -104,12 +104,35 @@ async function searchConfluence(query) {
         if (status === 401 || status === 403) {
             // Auth blocked — same pattern as ServiceNow: don't throw a scary
             // error, just surface the shortcut so the user can still get to
-            // Confluence in one click.
-            logger.warn('Phase 3', `Confluence REST API blocked (HTTP ${status}) — returning portal shortcut`);
+            // Confluence in one click. Tag the shortcut with a per-source
+            // notice so the UI can explain *why* only one card showed up
+            // instead of the failure degrading silently.
+            //
+            // Prefer Atlassian's own error message — it's far more diagnostic
+            // than a guess. E.g. a 403 body of
+            //   {"message":"Current user not permitted to use Confluence"}
+            // means the authenticated account simply has no Confluence access
+            // on this site (wrong account captured during SSO, or no license
+            // seat) — a code change can't fix that, but naming it lets the user
+            // act (reconnect with the right account / ask admin for a seat).
+            const atlassianMessage = error.response?.data?.message;
+            const hasTenantCookie = /(^|;\s*)tenant\.session\.token=/.test(tokens.cookieHeader || '');
+            logger.warn('Phase 3', `Confluence REST API blocked (HTTP ${status}) — returning portal shortcut${atlassianMessage ? ` — Atlassian: "${atlassianMessage}"` : ''} (tenantCookie=${hasTenantCookie})`);
+            // The "not permitted" 403 almost always means we're missing the
+            // tenant product-session cookie, NOT that the account lacks access.
+            // Guide the user to reconnect (which now re-captures that cookie).
+            if (status === 403 && !hasTenantCookie) {
+                portalShortcut._notice = 'Confluence couldn\'t authenticate (HTTP 403) — the app captured an incomplete session (missing the Confluence product-session cookie). Disconnect and reconnect Confluence in Settings to re-capture it. Showing the portal-search shortcut only.';
+            } else if (atlassianMessage) {
+                portalShortcut._notice = `Confluence unavailable (HTTP ${status}): Atlassian says "${atlassianMessage}". Try reconnecting Confluence in Settings; if it persists, confirm your account can open ${baseUrl}/wiki in a browser. Showing the portal-search shortcut only.`;
+            } else {
+                portalShortcut._notice = 'Confluence session not authenticated (HTTP ' + status + ') — reconnect Confluence in Settings.';
+            }
             return [portalShortcut];
         }
 
         logger.error('Phase 3', 'Confluence search failed (returning portal shortcut)', error);
+        portalShortcut._notice = `Confluence search failed (${error.message || 'unknown error'}) — showing the portal-search shortcut only.`;
         return [portalShortcut];
     }
 }

@@ -1,5 +1,6 @@
 const { classify, heuristicClassify } = require('./intent');
 const { composeSystemPrompt: composeFromSkills, VALID_INTENTS } = require('./skills');
+const { fetchMany } = require('./fetchers');
 const logger = require('../../utils/logger');
 
 // Phase-1 orchestrator — given a user query, decide which skill(s) to load
@@ -34,7 +35,32 @@ async function prepareAgentPrompt({ query, classifyFn, useLLMClassifier = true }
     return { systemPrompt, intent: intentInfo };
 }
 
+/**
+ * Phase-2 enrichment — for the top-N search results, fetch the full body
+ * content (Confluence page bodies, ServiceNow tickets + work notes /
+ * comments). Returns the same array with `fullContent` populated on the
+ * results that have a supported fetcher AND a successful fetch.
+ *
+ * Sources without a fetcher (Slack, Jira portal shortcut, Box, Datadog,
+ * etc.) pass through unchanged — they keep their snippet only.
+ *
+ * Failure is silent on purpose: if fetching is slow, the network drops,
+ * a cookie expired, or the body is parseable HTML we still want a
+ * synthesise call to happen with whatever we got. We log success/failure
+ * counts at INFO level so it's visible in the terminal.
+ */
+async function enrichResults(results, options = {}) {
+    if (!Array.isArray(results) || results.length === 0) return results;
+    try {
+        return await fetchMany(results, options);
+    } catch (err) {
+        logger.warn('Phase 6', `Result enrichment failed (will use snippets only): ${err.message}`);
+        return results;
+    }
+}
+
 module.exports = {
     prepareAgentPrompt,
+    enrichResults,
     VALID_INTENTS,
 };

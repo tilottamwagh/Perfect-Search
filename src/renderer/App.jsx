@@ -4,7 +4,7 @@ import ResultCard from './components/ResultCard';
 import LoginPanel from './components/LoginPanel';
 import SettingsPanel from './components/SettingsPanel';
 import LoadingSpinner from './components/LoadingSpinner';
-import AIAnswer from './components/AIAnswer';
+import AIAnswer, { renderMarkdown } from './components/AIAnswer';
 import Logo from './components/Logo';
 import { useTheme } from './hooks/useTheme';
 import { welcomeConfetti } from './utils/confetti';
@@ -38,6 +38,97 @@ export default function App() {
     const searchRequestIdRef = useRef(0);
     const webviewRef = useRef(null);
     const lastSlackUrlRef = useRef(null);
+
+    // Embedded ServiceNow agent-UI panel. Reuses the same authenticated
+    // partition as the connector (persist:perfectsearch-servicenow), so the
+    // webview is logged in via the user's existing SSO session — no second
+    // login. `snowUrl` is the instance base; ServiceNow redirects to the
+    // user's default workspace and the user navigates freely from there.
+    const [snowUrl, setSnowUrl] = useState(null);
+    const snowWebviewRef = useRef(null);
+    const isSnowPanelOpen = Boolean(snowUrl);
+
+    const openServiceNowPanel = useCallback(async () => {
+        try {
+            // Resolve the effective URL (auth token → config → env) — the URL is
+            // usually on the auth token, not in config.servicenow.
+            const res = await window.perfectsearch.getSourceUrl('servicenow');
+            const base = res && res.url;
+            if (!base) {
+                setErrors((prev) => ({ ...prev, global: 'ServiceNow instance URL not set. Open Settings → ServiceNow URL first.' }));
+                return;
+            }
+            // Opening the ServiceNow panel takes over the right column — close
+            // the Slack panel if it's open so they don't fight for space.
+            setSlackPanelUrl(null);
+            setSnowUrl(base.replace(/\/$/, ''));
+        } catch (err) {
+            setErrors((prev) => ({ ...prev, global: `Could not open ServiceNow: ${err && err.message}` }));
+        }
+    }, []);
+
+    const handleCloseSnowPanel = useCallback(() => {
+        if (snowWebviewRef.current) {
+            try { snowWebviewRef.current.stop(); } catch (_) { /* ignore */ }
+        }
+        setSnowUrl(null);
+    }, []);
+
+    // "✨ Analyze case" — read the case the embedded ServiceNow webview is on,
+    // and stream an AI diagnosis (summary, root cause, troubleshooting).
+    const [analyzeStatus, setAnalyzeStatus] = useState('idle'); // idle|streaming|done|error
+    const [analyzeText, setAnalyzeText] = useState('');
+    const [analyzeError, setAnalyzeError] = useState(null);
+    const [analyzeMeta, setAnalyzeMeta] = useState(null);
+    const analyzeReqRef = useRef(0);
+
+    const handleAnalyzeCase = useCallback(async () => {
+        const wv = snowWebviewRef.current;
+        if (!wv) return;
+        let currentUrl = '';
+        let wcId = null;
+        try { currentUrl = wv.getURL(); } catch (_) { /* ignore */ }
+        try { wcId = wv.getWebContentsId(); } catch (_) { /* ignore */ }
+
+        const requestId = ++analyzeReqRef.current;
+        setAnalyzeStatus('streaming');
+        setAnalyzeText('');
+        setAnalyzeError(null);
+        setAnalyzeMeta(null);
+        try {
+            const resp = await window.perfectsearch.analyzeServiceNowCase(
+                requestId, currentUrl, wcId,
+                (delta) => { if (requestId === analyzeReqRef.current) setAnalyzeText((p) => p + delta); }
+            );
+            if (requestId !== analyzeReqRef.current) return;
+            if (resp.success) {
+                setAnalyzeMeta(resp.data);
+                setAnalyzeStatus('done');
+            } else {
+                setAnalyzeError(resp.error);
+                setAnalyzeStatus('error');
+            }
+        } catch (e) {
+            if (requestId !== analyzeReqRef.current) return;
+            setAnalyzeError(e.message);
+            setAnalyzeStatus('error');
+        }
+    }, []);
+
+    const closeAnalyze = useCallback(() => {
+        analyzeReqRef.current += 1; // cancel any in-flight stream updates
+        setAnalyzeStatus('idle');
+        setAnalyzeText('');
+        setAnalyzeError(null);
+        setAnalyzeMeta(null);
+    }, []);
+
+    // Clicking a [N] citation in the analysis opens that source (KB article,
+    // Slack thread, Confluence page, …) in the browser.
+    const onAnalyzeCitation = useCallback((n) => {
+        const src = analyzeMeta && analyzeMeta.sources && analyzeMeta.sources[n - 1];
+        if (src && src.link) { try { window.perfectsearch.openLink(src.link); } catch (_) { /* ignore */ } }
+    }, [analyzeMeta]);
 
     // Derive a stable workspace identifier so the webview is only recreated
     // when switching workspaces. Works for both:
@@ -426,6 +517,17 @@ export default function App() {
     }, []);
 
     const isSlackPanelOpen = Boolean(slackPanelUrl);
+    const isRightPanelOpen = isSlackPanelOpen || isSnowPanelOpen;
+
+    // Resizable split between the left (search) column and the right panel.
+    // leftWidthPct is the left column's width as a % of the window; the divider
+    // drags it, double-click resets to 55/45.
+    const [leftWidthPct, setLeftWidthPct] = useState(55);
+    const [isDragging, setIsDragging] = useState(false);
+    const onDividerDrag = useCallback((e) => {
+        const pct = (e.clientX / window.innerWidth) * 100;
+        setLeftWidthPct(Math.min(85, Math.max(15, pct)));
+    }, []);
 
     const themeIcon = themePref === 'dark' ? '☀️' : themePref === 'light' ? '🌙' : '🖥️';
     const themeLabel = themePref === 'dark' ? 'Switch to light' : themePref === 'light' ? 'Use system theme' : 'Switch to dark';
@@ -434,10 +536,10 @@ export default function App() {
         <div className="min-h-screen flex flex-row text-slate-900 dark:text-slate-100">
             {/* LEFT COLUMN — search interface */}
             <div
-                className="flex flex-col min-h-screen transition-all duration-300 ease-in-out"
+                className={`flex flex-col min-h-screen ${isDragging ? '' : 'transition-all duration-300 ease-in-out'}`}
                 style={{
-                    flex: isSlackPanelOpen ? '0 0 55%' : '1 1 auto',
-                    maxWidth: isSlackPanelOpen ? '55%' : '100%',
+                    flex: isRightPanelOpen ? `0 0 ${leftWidthPct}%` : '1 1 auto',
+                    maxWidth: isRightPanelOpen ? `${leftWidthPct}%` : '100%',
                 }}
             >
                 <header className="glass-header sticky top-0 z-30 px-6 py-3 flex items-center justify-between shrink-0">
@@ -475,6 +577,15 @@ export default function App() {
                                 ✕ Close Slack
                             </button>
                         )}
+                        <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
+                        <button
+                            type="button"
+                            onClick={isSnowPanelOpen ? handleCloseSnowPanel : openServiceNowPanel}
+                            title={isSnowPanelOpen ? 'Close ServiceNow panel' : 'Open ServiceNow (your dashboard, cases, KB) in an embedded tab'}
+                            className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${isSnowPanelOpen ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-950 dark:text-red-300 dark:hover:bg-red-900' : 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-950 dark:text-green-300 dark:hover:bg-green-900'}`}
+                        >
+                            {isSnowPanelOpen ? '✕ Close ServiceNow' : '🧭 ServiceNow'}
+                        </button>
                         <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
                         <button
                             type="button"
@@ -661,6 +772,30 @@ export default function App() {
                 </main>
             </div>
 
+            {/* DRAGGABLE SPLITTER — resize left vs right; double-click resets */}
+            {isRightPanelOpen && (
+                <div
+                    onMouseDown={() => setIsDragging(true)}
+                    onDoubleClick={() => setLeftWidthPct(55)}
+                    title="Drag to resize · double-click to reset"
+                    className="relative shrink-0 w-1.5 cursor-col-resize bg-slate-200 dark:bg-slate-800 hover:bg-indigo-400 dark:hover:bg-indigo-500 transition-colors"
+                >
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-10 rounded-full bg-slate-400 dark:bg-slate-600 pointer-events-none" />
+                </div>
+            )}
+
+            {/* While dragging, a full-window overlay captures the mouse so the
+                <webview> (a native layer) can't swallow mousemove/mouseup. */}
+            {isDragging && (
+                <div
+                    className="fixed inset-0 z-50"
+                    style={{ cursor: 'col-resize' }}
+                    onMouseMove={onDividerDrag}
+                    onMouseUp={() => setIsDragging(false)}
+                    onMouseLeave={() => setIsDragging(false)}
+                />
+            )}
+
             {/* RIGHT COLUMN — Slack webview panel */}
             {isSlackPanelOpen && (
                 <div
@@ -693,6 +828,153 @@ export default function App() {
                         useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
                         style={{ flex: '1 1 auto', width: '100%', height: '100%' }}
                     />
+                </div>
+            )}
+
+            {/* RIGHT COLUMN — embedded ServiceNow agent UI.
+                Same partition as the connector, so it's already authenticated.
+                Full agent UI with free navigation (home, dashboards, cases, KB). */}
+            {isSnowPanelOpen && (
+                <div
+                    className="relative border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col"
+                    style={{ flex: '1 1 auto', minWidth: '300px' }}
+                >
+                    <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shrink-0">
+                        <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold uppercase tracking-wider">ServiceNow</span>
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={handleAnalyzeCase}
+                                disabled={analyzeStatus === 'streaming'}
+                                className="text-xs px-2.5 py-1 rounded-md font-medium bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-950 dark:text-indigo-300 dark:hover:bg-indigo-900 disabled:opacity-50 transition-colors"
+                                title="Read the open case (description, comments, screenshots) and produce a summary + likely root cause + troubleshooting steps"
+                            >
+                                {analyzeStatus === 'streaming' ? '✨ Analyzing…' : '✨ Analyze case'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => { const wv = snowWebviewRef.current; if (wv) { try { wv.reload(); } catch (_) { /* ignore */ } } }}
+                                className="text-slate-400 hover:text-indigo-500 text-sm leading-none px-1"
+                                title="Reload ServiceNow"
+                            >
+                                ⟳
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => { const wv = snowWebviewRef.current; if (wv) { try { window.perfectsearch.openLink(wv.getURL()); } catch (_) { /* ignore */ } } }}
+                                className="text-slate-400 hover:text-indigo-500 text-sm leading-none px-1"
+                                title="Open current page in your browser"
+                            >
+                                ↗
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleCloseSnowPanel}
+                                className="text-slate-400 hover:text-red-500 text-sm leading-none px-1"
+                                title="Close ServiceNow panel"
+                            >
+                                ✕
+                            </button>
+                        </div>
+                    </div>
+                    <div className="relative" style={{ flex: '1 1 auto', minHeight: 0 }}>
+                        <webview
+                            key="snow-webview"
+                            ref={snowWebviewRef}
+                            src={snowUrl}
+                            partition="persist:perfectsearch-servicenow"
+                            useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                            allowpopups="true"
+                            // A <webview> is a separate native compositing layer that
+                            // punches through semi-transparent DOM overlays, so hide it
+                            // entirely while the analysis panel is shown. It keeps its
+                            // state (not unmounted) and reappears on close.
+                            style={{ width: '100%', height: '100%', display: analyzeStatus === 'idle' ? 'flex' : 'none' }}
+                        />
+
+                        {/* AI case-analysis result — replaces the (hidden) webview.
+                            Fully opaque so the ServiceNow page can't bleed through. */}
+                        {analyzeStatus !== 'idle' && (
+                            <div className="absolute inset-0 bg-white dark:bg-slate-900 flex flex-col animate-fade-in">
+                                <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 shrink-0">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-base">✨</span>
+                                        <span className="font-bold text-sm bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 dark:from-indigo-400 dark:via-purple-400 dark:to-pink-400 bg-clip-text text-transparent">
+                                            Case Analysis{analyzeMeta?.caseNumber ? ` — ${analyzeMeta.caseNumber}` : ''}
+                                        </span>
+                                        {analyzeStatus === 'streaming' && (
+                                            <span className="text-[10px] uppercase tracking-wider text-indigo-600 dark:text-indigo-400 font-semibold animate-pulse">analyzing…</span>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        {analyzeStatus === 'done' && analyzeText && (
+                                            <button
+                                                type="button"
+                                                onClick={() => { try { navigator.clipboard.writeText(analyzeText); } catch (_) { /* ignore */ } }}
+                                                className="text-xs px-2 py-1 rounded-md bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 font-medium"
+                                                title="Copy analysis"
+                                            >
+                                                Copy
+                                            </button>
+                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={closeAnalyze}
+                                            className="text-slate-400 hover:text-red-500 text-sm leading-none px-1"
+                                            title="Close analysis"
+                                        >
+                                            ✕
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="flex-1 overflow-y-auto px-5 py-4 text-sm">
+                                    {analyzeStatus === 'error' ? (
+                                        <div className="text-sm text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-xl px-4 py-3">
+                                            {analyzeError || 'Analysis failed.'}
+                                        </div>
+                                    ) : (
+                                        <>
+                                            {analyzeText
+                                                ? renderMarkdown(analyzeText, onAnalyzeCitation)
+                                                : <p className="text-slate-500 dark:text-slate-400">Reading the case, comments, screenshots and knowledge base…</p>}
+
+                                            {/* Clickable source list behind the [N] citations */}
+                                            {analyzeStatus === 'done' && analyzeMeta && analyzeMeta.sources && analyzeMeta.sources.length > 0 && (
+                                                <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800">
+                                                    <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Sources</p>
+                                                    <ol className="space-y-1">
+                                                        {analyzeMeta.sources.map((s) => (
+                                                            <li key={s.n} className="text-xs text-slate-600 dark:text-slate-300 flex gap-1.5">
+                                                                <span className="font-bold text-indigo-600 dark:text-indigo-400 shrink-0">[{s.n}]</span>
+                                                                {s.link ? (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => onAnalyzeCitation(s.n)}
+                                                                        className="text-left hover:underline text-indigo-700 dark:text-indigo-300"
+                                                                        title={s.link}
+                                                                    >
+                                                                        {s.title} <span className="text-slate-400">· {s.source}{s.type ? ` (${s.type})` : ''}</span>
+                                                                    </button>
+                                                                ) : (
+                                                                    <span>{s.title} <span className="text-slate-400">· {s.source}</span></span>
+                                                                )}
+                                                            </li>
+                                                        ))}
+                                                    </ol>
+                                                </div>
+                                            )}
+
+                                            {analyzeStatus === 'done' && analyzeMeta && (
+                                                <p className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800 text-[11px] text-slate-400 dark:text-slate-500">
+                                                    Read {analyzeMeta.taskCount || 0} related record(s) · {analyzeMeta.attachmentCount || 0} attachment(s) · {analyzeMeta.imagesRead || 0} screenshot(s) · {analyzeMeta.textFilesRead || 0} file(s) · {analyzeMeta.kbCount || 0} knowledge-base reference(s){analyzeMeta.model ? ` · ${analyzeMeta.provider || ''}/${analyzeMeta.model}` : ''}
+                                                </p>
+                                            )}
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
                 </div>
             )}
         </div>
