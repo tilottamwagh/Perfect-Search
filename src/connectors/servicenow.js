@@ -836,4 +836,8 @@ async function collectCaseBundle(win, baseUrl, ref, { maxImages = 6, maxImageByt
     return { table, record, journal, relatedTasks, images, textFiles, skipped, attachmentCount, taskCount: relatedTasks.length };
 }
 
-module.exports = { searchServiceNow, parseCaseRef, collectCaseBundle };
+module.exports = {
+    searchServiceNow, parseCaseRef, collectCaseBundle,
+    // Reusable file-text extractors (also used by Ask AI Expert uploads).
+    extractZipText, extractXlsxText, smartSliceLog, looksTextualStr,
+};

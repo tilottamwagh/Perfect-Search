@@ -5,6 +5,7 @@ import LoginPanel from './components/LoginPanel';
 import SettingsPanel from './components/SettingsPanel';
 import LoadingSpinner from './components/LoadingSpinner';
 import AIAnswer, { renderMarkdown } from './components/AIAnswer';
+import ExpertPanel from './components/ExpertPanel';
 import Logo from './components/Logo';
 import { useTheme } from './hooks/useTheme';
 import { welcomeConfetti } from './utils/confetti';
@@ -586,6 +587,14 @@ export default function App() {
                         >
                             {isSnowPanelOpen ? '✕ Close ServiceNow' : '🧭 ServiceNow'}
                         </button>
+                        <button
+                            type="button"
+                            onClick={() => setView((v) => (v === 'expert' ? 'search' : 'expert'))}
+                            title="Ask AI Expert — work an issue conversationally"
+                            className={`ml-1 text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${view === 'expert' ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-950 dark:text-indigo-300 dark:hover:bg-indigo-900'}`}
+                        >
+                            🧠 Ask AI Expert
+                        </button>
                         <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
                         <button
                             type="button"
@@ -613,7 +622,9 @@ export default function App() {
                     </div>
                 )}
 
-                <main className="flex-1 w-full mx-auto px-4 py-6 flex flex-col gap-5 overflow-y-auto" style={{ maxWidth: '56rem' }}>
+                {view === 'expert' && <ExpertPanel />}
+
+                <main className={`flex-1 w-full mx-auto px-4 py-6 flex flex-col gap-5 overflow-y-auto ${view === 'expert' ? 'hidden' : ''}`} style={{ maxWidth: '56rem' }}>
                     {!query && (
                         <div className="text-center pt-4 pb-2 animate-fade-in">
                             <h1 className="text-3xl sm:text-4xl font-bold tracking-tight bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 dark:from-indigo-400 dark:via-purple-400 dark:to-pink-400 bg-clip-text text-transparent">

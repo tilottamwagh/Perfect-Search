@@ -63,4 +63,35 @@ contextBridge.exposeInMainWorld('perfectsearch', {
         return ipcRenderer.invoke('servicenow:analyzeCase', { requestId, url, webContentsId })
             .finally(() => ipcRenderer.removeListener(channel, handler));
     },
+
+    // Ask AI Expert (conversational)
+    expertListThreads: () => ipcRenderer.invoke('expert:listThreads'),
+    expertGetThread: (id) => ipcRenderer.invoke('expert:getThread', { id }),
+    expertNewThread: (opts) => ipcRenderer.invoke('expert:newThread', opts || {}),
+    expertDeleteThread: (id) => ipcRenderer.invoke('expert:deleteThread', { id }),
+    expertRenameThread: (id, title) => ipcRenderer.invoke('expert:renameThread', { id, title }),
+    expertIndexStats: () => ipcRenderer.invoke('expert:indexStats'),
+    expertClearIndex: () => ipcRenderer.invoke('expert:clearIndex'),
+    expertFeedback: (rating, links) => ipcRenderer.invoke('expert:feedback', { rating, links }),
+    expertSaveLearning: (payload) => ipcRenderer.invoke('expert:saveLearning', payload),
+    expertBuildIndex: (requestId, onProgress) => {
+        const channel = `expert:index:${requestId}`;
+        const handler = (_event, p) => { try { onProgress && onProgress(p); } catch (_) {} };
+        ipcRenderer.on(channel, handler);
+        return ipcRenderer.invoke('expert:buildIndex', { requestId })
+            .finally(() => ipcRenderer.removeListener(channel, handler));
+    },
+    expertSendMessage: (requestId, threadId, text, attachments, onChunk, onEvent) => {
+        const chunkChannel = `ai:chunk:${requestId}`;
+        const eventChannel = `expert:event:${requestId}`;
+        const chunkHandler = (_event, delta) => { try { onChunk(delta); } catch (_) {} };
+        const eventHandler = (_event, evt) => { try { onEvent && onEvent(evt); } catch (_) {} };
+        ipcRenderer.on(chunkChannel, chunkHandler);
+        ipcRenderer.on(eventChannel, eventHandler);
+        return ipcRenderer.invoke('expert:sendMessage', { requestId, threadId, text, attachments })
+            .finally(() => {
+                ipcRenderer.removeListener(chunkChannel, chunkHandler);
+                ipcRenderer.removeListener(eventChannel, eventHandler);
+            });
+    },
 });

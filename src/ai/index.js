@@ -174,6 +174,22 @@ async function extractCaseQueries(caseText) {
     }
 }
 
+// Multi-turn chat for "Ask AI Expert". Routes to the active provider's
+// expertChat(). Currently implemented by the OpenAI adapter.
+async function expertChat({ messages, systemPrompt, onChunk }) {
+    const providerId = resolveActiveProvider();
+    if (!providerId) throw new Error('AI_NOT_CONFIGURED');
+    const adapter = PROVIDERS[providerId];
+    if (typeof adapter.expertChat !== 'function') {
+        throw new Error(`Ask AI Expert isn't supported by ${adapter.META.name} yet. Switch your active AI provider to OpenAI in Settings.`);
+    }
+    const apiKey = tokenStore.getAiKey(providerId);
+    if (!apiKey) throw new Error('AI_NOT_CONFIGURED');
+    const model = tokenStore.getAiModel(providerId) || adapter.META.defaultModel;
+    const result = await adapter.expertChat({ messages, systemPrompt, apiKey, onChunk, model });
+    return { ...result, provider: providerId };
+}
+
 async function synthesizeWithWeb({ query, onChunk }) {
     const providerId = resolveActiveProvider();
     if (!providerId) throw new Error('AI_NOT_CONFIGURED');
@@ -188,4 +204,4 @@ async function synthesizeWithWeb({ query, onChunk }) {
     return { ...result, provider: providerId };
 }
 
-module.exports = { listProviders, resolveActiveProvider, testKey, synthesize, synthesizeWithWeb, analyzeCase, extractCaseQueries, PROVIDERS, ORDER };
+module.exports = { listProviders, resolveActiveProvider, testKey, synthesize, synthesizeWithWeb, analyzeCase, extractCaseQueries, expertChat, PROVIDERS, ORDER };

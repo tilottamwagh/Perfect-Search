@@ -706,3 +706,165 @@ ipcMain.handle('servicenow:analyzeCase', async (event, { requestId, url, webCont
     return { success: false, error: error.message };
   }
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// Ask AI Expert — conversational analyst (Phase A: chat MVP, no tools yet)
+// ───────────────────────────────────────────────────────────────────────────
+ipcMain.handle('expert:listThreads', async () => {
+  try {
+    const threadStore = require('./ai/expert/threadStore');
+    return { success: true, threads: threadStore.list() };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('expert:getThread', async (_event, { id }) => {
+  try {
+    const threadStore = require('./ai/expert/threadStore');
+    return { success: true, thread: threadStore.get(id) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('expert:newThread', async (_event, { title, seedText } = {}) => {
+  try {
+    const threadStore = require('./ai/expert/threadStore');
+    const messages = [];
+    if (seedText && seedText.trim()) {
+      messages.push({ role: 'user', content: seedText.trim() });
+    }
+    const thread = threadStore.create({ title, messages });
+    return { success: true, thread };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('expert:deleteThread', async (_event, { id }) => {
+  try {
+    const threadStore = require('./ai/expert/threadStore');
+    return { success: threadStore.remove(id) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('expert:renameThread', async (_event, { id, title }) => {
+  try {
+    const threadStore = require('./ai/expert/threadStore');
+    const t = threadStore.update(id, { title: String(title || '').slice(0, 120) || 'Untitled' });
+    return { success: !!t, thread: t };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Phase 0 — knowledge index build / stats / clear.
+ipcMain.handle('expert:indexStats', async () => {
+  try {
+    const knowledge = require('./ai/expert/knowledge');
+    return { success: true, stats: knowledge.stats() };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('expert:buildIndex', async (event, { requestId } = {}) => {
+  try {
+    const { buildIndex } = require('./ai/expert/ingest');
+    const channel = `expert:index:${requestId}`;
+    const result = await buildIndex({
+      onProgress: (p) => { if (!event.sender.isDestroyed()) event.sender.send(channel, p); },
+    });
+    return { success: true, data: result };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('expert:clearIndex', async () => {
+  try {
+    const knowledge = require('./ai/expert/knowledge');
+    knowledge.clear();
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Phase D — feedback (👍/👎 nudges cited-source rank) and saving learnings.
+ipcMain.handle('expert:feedback', async (_event, { rating, links } = {}) => {
+  try {
+    const knowledge = require('./ai/expert/knowledge');
+    knowledge.bumpBoost(links || [], rating > 0 ? 1 : -1);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('expert:saveLearning', async (_event, payload) => {
+  try {
+    const { saveLearning } = require('./ai/expert/ingest');
+    const data = await saveLearning(payload || {});
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('expert:sendMessage', async (event, { requestId, threadId, text, attachments }) => {
+  try {
+    const threadStore = require('./ai/expert/threadStore');
+    const { runExpertAgent } = require('./ai/expert/agent');
+    const { processUpload } = require('./ai/expert/files');
+    const { EXPERT_AGENT_SYSTEM_PROMPT } = require('./ai/expert/prompt');
+    const chunkChannel = `ai:chunk:${requestId}`;
+    const eventChannel = `expert:event:${requestId}`;
+
+    let thread = threadStore.get(threadId);
+    if (!thread) return { success: false, error: 'Thread not found' };
+
+    // Process any uploaded files/screenshots: extract text (logs/.lis/.xlsx/zip)
+    // into the message, keep images for vision on this turn.
+    const images = [];
+    const fileTexts = [];
+    for (const att of (attachments || [])) {
+      if (!event.sender.isDestroyed()) event.sender.send(eventChannel, { type: 'status', text: `reading ${att.name}` });
+      const r = await processUpload(att);
+      if (r.kind === 'image') images.push(r.image);
+      else if (r.text) fileTexts.push(r.text);
+    }
+    const composedText = [text, ...fileTexts].filter(Boolean).join('\n\n');
+    const imageNote = images.length ? `\n\n[Attached screenshot(s): ${images.map((i) => i.name).join(', ')}]` : '';
+
+    // Append the user's message, then build the model message history. Only
+    // role/content go to the model (drop our extra metadata fields).
+    thread = threadStore.appendMessage(threadId, { role: 'user', content: (composedText || '(no text)') + imageNote });
+    const history = (thread.messages || []).map((m) => ({ role: m.role, content: m.content }));
+
+    // Phase B: agentic tool-use loop. Streams the final answer on the chunk
+    // channel; reports tool activity on the event channel for live UI feedback.
+    const result = await runExpertAgent({
+      messages: history,
+      systemPrompt: EXPERT_AGENT_SYSTEM_PROMPT,
+      currentImages: images,
+      onChunk: (delta) => { if (!event.sender.isDestroyed()) event.sender.send(chunkChannel, delta); },
+      onEvent: (evt) => { if (!event.sender.isDestroyed()) event.sender.send(eventChannel, evt); },
+    });
+
+    threadStore.appendMessage(threadId, {
+      role: 'assistant',
+      content: result.text,
+      provider: result.provider,
+      model: result.model,
+      sources: result.sources || [],
+    });
+
+    return { success: true, data: { text: result.text, provider: result.provider, model: result.model, sources: result.sources || [] } };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});

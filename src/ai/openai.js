@@ -230,6 +230,54 @@ async function analyzeCase({ caseBundle, kbResults, apiKey, onChunk, model }) {
     };
 }
 
+// Multi-turn streaming chat for the "Ask AI Expert" feature. Takes the full
+// message history (array of {role, content}) + a system prompt and streams the
+// assistant reply. content may be a string or an array of parts (text/image)
+// for multimodal turns.
+async function expertChat({ messages, systemPrompt, apiKey, onChunk, model }) {
+    const modelId = model || DEFAULT_MODEL;
+    const rejectsTemperature = /^(o\d|gpt-5)/i.test(modelId);
+    const reqBody = {
+        model: modelId,
+        stream: true,
+        stream_options: { include_usage: true },
+        max_completion_tokens: 4096,
+        messages: [
+            { role: 'system', content: systemPrompt || 'You are a helpful assistant.' },
+            ...messages,
+        ],
+    };
+    if (!rejectsTemperature) reqBody.temperature = 0.4;
+
+    const startedAt = Date.now();
+    const resp = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify(reqBody),
+    });
+    if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`OpenAI HTTP ${resp.status}: ${errBody.substring(0, 400)}`);
+    }
+
+    let fullText = '';
+    let usage = null;
+    for await (const chunk of sseLines(resp)) {
+        const delta = chunk?.choices?.[0]?.delta?.content;
+        if (typeof delta === 'string' && delta.length > 0) {
+            fullText += delta;
+            if (onChunk) try { onChunk(delta); } catch (_) {}
+        }
+        if (chunk?.usage) usage = chunk.usage;
+    }
+    return {
+        text: fullText,
+        usage: usage ? { input_tokens: usage.prompt_tokens, output_tokens: usage.completion_tokens, total_tokens: usage.total_tokens } : null,
+        model: modelId,
+        elapsedMs: Date.now() - startedAt,
+    };
+}
+
 // OpenAI chat-completions has no server-hosted web search. Return a clear
 // "not supported" so the UI can surface a helpful message rather than failing.
 async function synthesizeWithWeb() {
@@ -267,4 +315,22 @@ async function chat(systemPrompt, userPrompt, { apiKey, model, maxTokens = 256 }
     return data?.choices?.[0]?.message?.content || '';
 }
 
-module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat, analyzeCase };
+// Embeddings for the Ask AI Expert knowledge index. text-embedding-3-small at
+// 512 dims keeps the local vector store small while preserving good recall.
+const EMBED_URL = 'https://api.openai.com/v1/embeddings';
+async function embed(input, { apiKey, model = 'text-embedding-3-small', dimensions = 512 } = {}) {
+    const arr = Array.isArray(input) ? input : [input];
+    const resp = await fetch(EMBED_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({ model, input: arr, dimensions }),
+    });
+    if (!resp.ok) {
+        const b = await resp.text();
+        throw new Error(`OpenAI embeddings HTTP ${resp.status}: ${b.slice(0, 200)}`);
+    }
+    const data = await resp.json();
+    return (data.data || []).map((d) => d.embedding);
+}
+
+module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat, analyzeCase, expertChat, embed, API_URL, sseLines };
