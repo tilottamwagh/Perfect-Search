@@ -6,6 +6,7 @@ import SettingsPanel from './components/SettingsPanel';
 import LoadingSpinner from './components/LoadingSpinner';
 import AIAnswer, { renderMarkdown } from './components/AIAnswer';
 import ExpertPanel from './components/ExpertPanel';
+import Dashboard from './components/Dashboard';
 import Logo from './components/Logo';
 import { useTheme } from './hooks/useTheme';
 import { welcomeConfetti } from './utils/confetti';
@@ -23,6 +24,7 @@ export default function App() {
     const [activeFilter, setActiveFilter] = useState('All');
     const [timeTaken, setTimeTaken] = useState(null);
     const [view, setView] = useState('search');
+    const [todayCost, setTodayCost] = useState(null);
     const [reindexing, setReindexing] = useState(false);
     const [aiOpen, setAiOpen] = useState(false);
     const resultRefs = useRef({});
@@ -397,6 +399,17 @@ export default function App() {
         loadAuthStatus();
     }, [loadAuthStatus]);
 
+    // Keep the header "today spend" badge fresh — on launch and whenever the
+    // view changes (e.g. after running the Expert, returning from the dashboard).
+    useEffect(() => {
+        (async () => {
+            try {
+                const r = await window.perfectsearch.usageSummary();
+                if (r.success) setTodayCost(r.summary.today.cost || 0);
+            } catch (_) { /* ignore */ }
+        })();
+    }, [view]);
+
     // Welcome confetti — fires once per app launch when the dashboard mounts.
     // Empty dep array + a top-level guard keeps it from re-running if React
     // strict-mode double-invokes the effect during development.
@@ -595,6 +608,14 @@ export default function App() {
                         >
                             🧠 Ask AI Expert
                         </button>
+                        <button
+                            type="button"
+                            onClick={() => setView((v) => (v === 'dashboard' ? 'search' : 'dashboard'))}
+                            title={`AI usage & cost${todayCost != null ? ` — today ~$${todayCost.toFixed(todayCost < 1 ? 4 : 2)}` : ''}`}
+                            className={`ml-1 text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${view === 'dashboard' ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'}`}
+                        >
+                            📊 {todayCost != null ? `$${todayCost.toFixed(todayCost < 1 ? 3 : 2)}` : 'Usage'}
+                        </button>
                         <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
                         <button
                             type="button"
@@ -623,8 +644,9 @@ export default function App() {
                 )}
 
                 {view === 'expert' && <ExpertPanel />}
+                {view === 'dashboard' && <Dashboard />}
 
-                <main className={`flex-1 w-full mx-auto px-4 py-6 flex flex-col gap-5 overflow-y-auto ${view === 'expert' ? 'hidden' : ''}`} style={{ maxWidth: '56rem' }}>
+                <main className={`flex-1 w-full mx-auto px-4 py-6 flex flex-col gap-5 overflow-y-auto ${view === 'expert' || view === 'dashboard' ? 'hidden' : ''}`} style={{ maxWidth: '56rem' }}>
                     {!query && (
                         <div className="text-center pt-4 pb-2 animate-fade-in">
                             <h1 className="text-3xl sm:text-4xl font-bold tracking-tight bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 dark:from-indigo-400 dark:via-purple-400 dark:to-pink-400 bg-clip-text text-transparent">

@@ -84,8 +84,11 @@ export default function ExpertPanel() {
         try {
             await window.perfectsearch.expertBuildIndex(requestId, (p) => {
                 if (p.phase === 'search') setIndexProgress(`searching ${p.i}/${p.total} · ${p.collected} docs`);
+                else if (p.phase === 'confluence') setIndexProgress(`Confluence: ${p.count} pages…`);
+                else if (p.phase === 'servicenow-kb') setIndexProgress(`ServiceNow KB: ${p.count}…`);
+                else if (p.phase === 'web') setIndexProgress(`Docs site: ${p.count} pages…`);
                 else if (p.phase === 'embed') setIndexProgress(`embedding ${p.total} docs…`);
-                else if (p.phase === 'done') setIndexProgress(`+${p.added} new (${p.count} total)`);
+                else if (p.phase === 'done') setIndexProgress(p.quotaExhausted ? `${p.count} docs · OpenAI quota exhausted — add credits, then Build again to embed` : `+${p.added} new (${p.count} total · ${p.withEmbeddings} embedded)`);
             });
             await loadIndexStats();
         } catch (e) {
@@ -156,7 +159,7 @@ export default function ExpertPanel() {
             );
             if (requestId !== reqRef.current) return;
             if (resp.success) {
-                setMessages((p) => [...p, { role: 'assistant', content: resp.data.text, model: resp.data.model, provider: resp.data.provider, sources: resp.data.sources || [] }]);
+                setMessages((p) => [...p, { role: 'assistant', content: resp.data.text, model: resp.data.model, provider: resp.data.provider, sources: resp.data.sources || [], usage: resp.data.usage }]);
             } else {
                 setMessages((p) => [...p, { role: 'assistant', content: `⚠️ ${resp.error}` }]);
             }
@@ -324,6 +327,11 @@ export default function ExpertPanel() {
                         )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
+                        {(() => {
+                            const cost = messages.reduce((s, m) => s + ((m.usage && m.usage.cost) || 0), 0);
+                            const tok = messages.reduce((s, m) => s + ((m.usage && (m.usage.inTok + m.usage.outTok)) || 0), 0);
+                            return cost > 0 ? <span className="text-[10px] text-slate-400" title={`${tok} tokens this conversation`}>Σ ${cost.toFixed(cost < 1 ? 4 : 2)}</span> : null;
+                        })()}
                         {modelLabel && <span className="text-[10px] text-slate-400 hidden sm:inline">{modelLabel}</span>}
                         {messages.length > 0 && (
                             <button type="button" onClick={exportConversation} className="text-xs px-2 py-1 rounded-md bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300" title="Copy the whole conversation (markdown) — paste into a ServiceNow work note">
@@ -369,7 +377,12 @@ export default function ExpertPanel() {
                                             <button type="button" onClick={() => beginSaveLearning(i)} disabled={savingIdx === i || m.saved} className="text-indigo-600 dark:text-indigo-400 hover:underline disabled:opacity-60 disabled:no-underline" title="Save this resolution to the knowledge index so it's recalled on similar future issues">
                                                 {m.saved ? '✓ saved to knowledge' : (savingIdx === i ? 'saving…' : '💡 Save as learning')}
                                             </button>
-                                            <button type="button" onClick={() => copyMessage(m.content)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 ml-auto" title="Copy this answer">Copy</button>
+                                            {m.usage && (m.usage.inTok + m.usage.outTok) > 0 && (
+                                                <span className="text-[10px] text-slate-400 ml-auto" title={`↑${m.usage.inTok} in · ↓${m.usage.outTok} out`}>
+                                                    {((m.usage.inTok + m.usage.outTok) / 1000).toFixed(1)}k tok · ${m.usage.cost.toFixed(4)}
+                                                </span>
+                                            )}
+                                            <button type="button" onClick={() => copyMessage(m.content)} className={`text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 ${m.usage ? '' : 'ml-auto'}`} title="Copy this answer">Copy</button>
                                         </div>
                                     )}
                                     {m.role === 'assistant' && learningIdx === i && (

@@ -11,7 +11,7 @@ const store = new Store({
     encryptionKey: process.env.ENCRYPTION_KEY || 'fallback-key-set-env',
     clearInvalidConfig: true,
 });
-const MAX_DOCS = Number(process.env.EXPERT_KNOWLEDGE_MAX || 6000);
+const MAX_DOCS = Number(process.env.EXPERT_KNOWLEDGE_MAX || 40000);
 
 let docs = null;      // in-memory array
 let kwIndex = null;   // flexsearch Document
@@ -97,6 +97,27 @@ function addDocuments(newDocs) {
     return added;
 }
 
+// Docs that don't have an embedding yet (for resumable backfill).
+function unembedded(limit = 2000) {
+    load();
+    const out = [];
+    for (const d of docs) { if (!d.embedding) { out.push(d); if (out.length >= limit) break; } }
+    return out;
+}
+
+// Apply embeddings produced later (resumable backfill). pairs: [{id, embedding}].
+function applyEmbeddings(pairs) {
+    load();
+    let n = 0;
+    const byId = new Map(docs.map((d) => [d.id, d]));
+    for (const p of (pairs || [])) {
+        const d = byId.get(p.id);
+        if (d && Array.isArray(p.embedding)) { d.embedding = p.embedding; n += 1; }
+    }
+    if (n) persist();
+    return n;
+}
+
 function clear() {
     docs = [];
     kwIndex = freshIndex();
@@ -156,4 +177,4 @@ function recall(query, qEmb, k = 8) {
     return scored.slice(0, k).map((x) => x.d);
 }
 
-module.exports = { addDocuments, clear, stats, recall, keywordSearch, semanticSearch, cosine, getBoost, bumpBoost };
+module.exports = { addDocuments, clear, stats, recall, keywordSearch, semanticSearch, cosine, getBoost, bumpBoost, unembedded, applyEmbeddings };

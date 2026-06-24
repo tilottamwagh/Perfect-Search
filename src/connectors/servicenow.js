@@ -840,4 +840,6 @@ module.exports = {
     searchServiceNow, parseCaseRef, collectCaseBundle,
     // Reusable file-text extractors (also used by Ask AI Expert uploads).
     extractZipText, extractXlsxText, smartSliceLog, looksTextualStr,
+    // In-page authenticated JSON fetch (used by the KB crawler).
+    inPageJson,
 };

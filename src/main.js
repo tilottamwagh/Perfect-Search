@@ -571,6 +571,7 @@ ipcMain.handle('ai:synthesize', async (event, { requestId, query, results }) => 
         if (!event.sender.isDestroyed()) event.sender.send(channel, delta);
       },
     });
+    try { if (result.usage) require('./ai/usage').record({ feature: 'search', model: result.model, inTok: result.usage.input_tokens, outTok: result.usage.output_tokens }); } catch (_) { /* non-fatal */ }
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: error.message };
@@ -680,6 +681,7 @@ ipcMain.handle('servicenow:analyzeCase', async (event, { requestId, url, webCont
       kbResults,
       onChunk: (delta) => { if (!event.sender.isDestroyed()) event.sender.send(channel, delta); },
     });
+    try { if (result.usage) require('./ai/usage').record({ feature: 'analyze-case', model: result.model, inTok: result.usage.input_tokens, outTok: result.usage.output_tokens }); } catch (_) { /* non-fatal */ }
 
     return {
       success: true,
@@ -762,6 +764,43 @@ ipcMain.handle('expert:renameThread', async (_event, { id, title }) => {
 });
 
 // Phase 0 — knowledge index build / stats / clear.
+// Phase F — usage & cost analytics.
+ipcMain.handle('usage:summary', async (_event, opts) => {
+  try {
+    const usage = require('./ai/usage');
+    return { success: true, summary: usage.summary(opts || {}), pricing: usage.getPricing() };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('usage:perThread', async (_event, { threadId }) => {
+  try {
+    const usage = require('./ai/usage');
+    return { success: true, usage: usage.perThread(threadId) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('usage:setPricing', async (_event, { pricing }) => {
+  try {
+    require('./ai/usage').setPricing(pricing || {});
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('usage:clear', async () => {
+  try {
+    require('./ai/usage').clear();
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('expert:indexStats', async () => {
   try {
     const knowledge = require('./ai/expert/knowledge');
@@ -855,15 +894,26 @@ ipcMain.handle('expert:sendMessage', async (event, { requestId, threadId, text, 
       onEvent: (evt) => { if (!event.sender.isDestroyed()) event.sender.send(eventChannel, evt); },
     });
 
+    // Record token usage (each model/embedding call this turn) for the dashboard.
+    let turnIn = 0; let turnOut = 0; let turnCost = 0;
+    try {
+      const usage = require('./ai/usage');
+      for (const u of (result.usages || [])) {
+        turnIn += u.inTok || 0; turnOut += u.outTok || 0;
+        turnCost += usage.record({ feature: u.model && u.model.startsWith('text-embedding') ? 'expert-embed' : 'expert', model: u.model, inTok: u.inTok, outTok: u.outTok, threadId });
+      }
+    } catch (_) { /* non-fatal */ }
+
     threadStore.appendMessage(threadId, {
       role: 'assistant',
       content: result.text,
       provider: result.provider,
       model: result.model,
       sources: result.sources || [],
+      usage: { inTok: turnIn, outTok: turnOut, cost: turnCost },
     });
 
-    return { success: true, data: { text: result.text, provider: result.provider, model: result.model, sources: result.sources || [] } };
+    return { success: true, data: { text: result.text, provider: result.provider, model: result.model, sources: result.sources || [], usage: { inTok: turnIn, outTok: turnOut, cost: turnCost } } };
   } catch (error) {
     return { success: false, error: error.message };
   }

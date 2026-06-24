@@ -330,7 +330,10 @@ async function embed(input, { apiKey, model = 'text-embedding-3-small', dimensio
         throw new Error(`OpenAI embeddings HTTP ${resp.status}: ${b.slice(0, 200)}`);
     }
     const data = await resp.json();
-    return (data.data || []).map((d) => d.embedding);
+    return {
+        vectors: (data.data || []).map((d) => d.embedding),
+        usage: { total_tokens: data.usage ? data.usage.total_tokens : 0 },
+    };
 }
 
 module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat, analyzeCase, expertChat, embed, API_URL, sseLines };

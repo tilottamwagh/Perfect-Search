@@ -168,7 +168,11 @@ async function execRecallKnowledge(args, ctx) {
     let qEmb = null;
     try {
         const key = tokenStore.getAiKey('openai');
-        if (key) { const e = await require('../openai').embed([query], { apiKey: key }); qEmb = e[0]; }
+        if (key) {
+            const e = await require('../openai').embed([query], { apiKey: key });
+            qEmb = e.vectors[0];
+            if (ctx.usages && e.usage && e.usage.total_tokens) ctx.usages.push({ model: 'text-embedding-3-small', inTok: e.usage.total_tokens, outTok: 0 });
+        }
     } catch (_) { /* keyword-only fallback */ }
     const hits = knowledge.recall(query, qEmb, 8);
     if (!hits.length) {
@@ -273,13 +277,17 @@ async function runExpertAgent({ messages, systemPrompt, onChunk, onEvent, curren
         }
     }
 
-    const ctx = { sources: [], sourceIndex: new Map() };
+    const ctx = { sources: [], sourceIndex: new Map(), usages: [] };
+    const recordStep = (step) => {
+        if (step.usage) ctx.usages.push({ model, inTok: step.usage.prompt_tokens || 0, outTok: step.usage.completion_tokens || 0 });
+    };
 
     for (let iter = 0; iter < MAX_ITERATIONS; iter += 1) {
         const step = await streamStep({ apiKey, model, messages: convo, tools: TOOL_SCHEMAS, onChunk });
+        recordStep(step);
         if (step.toolCalls.length === 0) {
             logger.success('Phase 8', `Expert agent answered after ${iter} tool round(s); sources=${ctx.sources.length}`);
-            return { text: step.content, sources: ctx.sources, provider: providerId, model };
+            return { text: step.content, sources: ctx.sources, usages: ctx.usages, provider: providerId, model };
         }
         convo.push({ role: 'assistant', content: step.content || null, tool_calls: step.toolCalls });
         for (const tc of step.toolCalls) {
@@ -296,7 +304,8 @@ async function runExpertAgent({ messages, systemPrompt, onChunk, onEvent, curren
     if (onEvent) try { onEvent({ type: 'status', text: 'wrapping up' }); } catch (_) {}
     const finalConvo = [...convo, { role: 'user', content: 'You have gathered enough. Give your best analysis and next steps now, citing sources with [n].' }];
     const final = await streamStep({ apiKey, model, messages: finalConvo, tools: null, onChunk });
-    return { text: final.content, sources: ctx.sources, provider: providerId, model };
+    recordStep(final);
+    return { text: final.content, sources: ctx.sources, usages: ctx.usages, provider: providerId, model };
 }
 
 module.exports = { runExpertAgent, TOOL_SCHEMAS, sourceOptions };

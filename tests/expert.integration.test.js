@@ -58,6 +58,16 @@ describe('Ask AI Expert — cross-phase integration', () => {
         expect(knowledge.keywordSearch('GUIDs', 5).some((d) => d.link === 'k1')).toBe(true);
     });
 
+    it('Crawlers: module loads and stripHtml extracts readable text', () => {
+        const crawl = require('../src/ai/expert/crawl');
+        expect(typeof crawl.crawlWebsite).toBe('function');
+        expect(typeof crawl.crawlConfluence).toBe('function');
+        expect(typeof crawl.crawlServiceNowKB).toBe('function');
+        const text = crawl.stripHtml('<div><script>bad()</script><p>Hello <b>world</b></p></div>');
+        expect(text).toMatch(/Hello world/);
+        expect(text).not.toMatch(/bad\(\)/);
+    });
+
     it('Phase D: learning + feedback', () => {
         const ingest = require('../src/ai/expert/ingest');
         expect(typeof ingest.saveLearning).toBe('function');
