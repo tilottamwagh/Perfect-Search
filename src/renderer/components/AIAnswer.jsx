@@ -281,6 +281,7 @@ export default function AIAnswer({ query, results, mode = 'internal', onCitation
                     { name: 'Anthropic Claude', host: 'console.anthropic.com', supportsWeb: true },
                     { name: 'Google Gemini', host: 'aistudio.google.com', supportsWeb: true },
                     { name: 'OpenAI', host: 'platform.openai.com', supportsWeb: false },
+                    { name: 'DeepSeek', host: 'platform.deepseek.com', supportsWeb: false },
                     { name: 'Agent Router', host: 'agentrouter.org', supportsWeb: false },
                 ];
                 const relevant = isWeb ? providerOptions.filter((p) => p.supportsWeb) : providerOptions;

@@ -93,6 +93,66 @@ export default function App() {
         try { currentUrl = wv.getURL(); } catch (_) { /* ignore */ }
         try { wcId = wv.getWebContentsId(); } catch (_) { /* ignore */ }
 
+        // ServiceNow's split-pane UI loads the case in an inner frame, so
+        // wv.getURL() returns the nav-shell URL without a sys_id. Try to pull
+        // the real record URL from the page via JS (checks all iframes + the
+        // document URL + the g_form object that SN sets for the active record).
+        try {
+            const deepUrl = await wv.executeJavaScript(`(function(){
+                var numPat = /\\b(CSC|INC|RITM|CHG|PRB)\\d{4,}/i;
+                var hexPat = /[0-9a-f]{32}/i;
+                var sysIdPat = /sys_id=([0-9a-f]{32})/i;
+                var recPat = /\\/record\\/[a-z0-9_]+\\/([0-9a-f]{32})/i;
+
+                // 1. g_form.getUniqueValue() — set on any classic SN form
+                if (window.g_form && window.g_form.getUniqueValue) {
+                    try { var sid = window.g_form.getUniqueValue(); if (sid && sid.length === 32) return 'sys_id://' + sid; } catch(_){}
+                }
+
+                // 2. Decode the current URL fully — SN workspace puts the real
+                //    target URL as an encoded param: /nav/...?target=case.do%3Fsys_id%3D...
+                var decoded = '';
+                try { decoded = decodeURIComponent(decodeURIComponent(location.href)); } catch(_) { try { decoded = decodeURIComponent(location.href); } catch(_){} }
+                var dm = decoded.match(sysIdPat) || decoded.match(recPat);
+                if (dm) return decoded;
+
+                // 3. Scan all iframe src attributes (not contentWindow — avoids cross-origin block)
+                try {
+                    var frames = Array.from(document.querySelectorAll('iframe[src]'));
+                    for (var f = 0; f < frames.length; f++) {
+                        var src = frames[f].getAttribute('src') || '';
+                        try { src = decodeURIComponent(src); } catch(_){}
+                        if (sysIdPat.test(src) || recPat.test(src)) return src;
+                    }
+                } catch(_){}
+
+                // 4. Look for 32-hex IDs in the current page's URL hash/params
+                var hashAndSearch = location.hash + location.search;
+                var hm = hashAndSearch.match(hexPat);
+                if (hm && hm[0].length === 32) return 'sys_id://' + hm[0];
+
+                // 5. Extract case number from visible form fields (value= attributes)
+                try {
+                    var inputs = Array.from(document.querySelectorAll('input[value]'));
+                    for (var i = 0; i < inputs.length; i++) {
+                        var v = inputs[i].value || inputs[i].getAttribute('value') || '';
+                        var nm = v.match(numPat);
+                        if (nm) return 'case-number://' + nm[0].toUpperCase();
+                    }
+                } catch(_){}
+
+                // 6. Title, then full body text (last resort)
+                var m2 = (document.title || '').match(numPat);
+                if (!m2) { try { m2 = (document.body && document.body.innerText || '').slice(0, 50000).match(numPat); } catch(_){} }
+                if (m2) return 'case-number://' + m2[0].toUpperCase();
+
+                return 'debug://' + encodeURIComponent(location.href.slice(0, 200));
+            })()`);
+            console.log('[analyze-case] deepUrl result:', deepUrl, '| outer URL:', currentUrl.slice(0, 120));
+            if (deepUrl && deepUrl.length > 0 && !deepUrl.startsWith('debug://')) currentUrl = deepUrl;
+            else if (deepUrl && deepUrl.startsWith('debug://')) console.warn('[analyze-case] JS found nothing; outer URL was:', currentUrl);
+        } catch (jsErr) { console.error('[analyze-case] executeJavaScript failed:', jsErr && jsErr.message); }
+
         const requestId = ++analyzeReqRef.current;
         setAnalyzeStatus('streaming');
         setAnalyzeText('');
@@ -106,6 +166,11 @@ export default function App() {
             if (requestId !== analyzeReqRef.current) return;
             if (resp.success) {
                 setAnalyzeMeta(resp.data);
+                // If streaming chunks never arrived (IPC timing edge-case), fall
+                // back to the full text returned in the response payload.
+                if (resp.data && resp.data.text) {
+                    setAnalyzeText((prev) => prev || resp.data.text);
+                }
                 setAnalyzeStatus('done');
             } else {
                 setAnalyzeError(resp.error);
@@ -920,14 +985,37 @@ export default function App() {
                             allowpopups="true"
                             // A <webview> is a separate native compositing layer that
                             // punches through semi-transparent DOM overlays, so hide it
-                            // entirely while the analysis panel is shown. It keeps its
-                            // state (not unmounted) and reappears on close.
-                            style={{ width: '100%', height: '100%', display: analyzeStatus === 'idle' ? 'flex' : 'none' }}
+                            // only while real analysis CONTENT is showing (streaming /
+                            // done). For the 'error' state (e.g. "no case open") we keep
+                            // the webview visible so the user can navigate to a case —
+                            // the error renders as a small dismissible banner instead.
+                            style={{ width: '100%', height: '100%', display: (analyzeStatus === 'streaming' || analyzeStatus === 'done') ? 'none' : 'flex' }}
                         />
 
-                        {/* AI case-analysis result — replaces the (hidden) webview.
-                            Fully opaque so the ServiceNow page can't bleed through. */}
-                        {analyzeStatus !== 'idle' && (
+                        {/* Error (e.g. "no case open") — a compact dismissible banner
+                            laid OVER the still-visible webview, so the user can navigate
+                            to a case and retry without losing the ServiceNow view. */}
+                        {analyzeStatus === 'error' && (
+                            <div className="absolute top-0 left-0 right-0 z-10 m-3 animate-fade-in">
+                                <div className="flex items-start gap-3 bg-amber-50 dark:bg-amber-950/80 backdrop-blur border border-amber-300 dark:border-amber-800 rounded-xl px-4 py-3 shadow-lg">
+                                    <span className="text-base shrink-0">⚠️</span>
+                                    <p className="flex-1 text-sm text-amber-900 dark:text-amber-200">{analyzeError || 'Analysis failed.'}</p>
+                                    <button
+                                        type="button"
+                                        onClick={closeAnalyze}
+                                        className="text-amber-700 dark:text-amber-300 hover:text-amber-900 dark:hover:text-amber-100 text-sm leading-none px-1 shrink-0"
+                                        title="Dismiss"
+                                    >
+                                        ✕
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* AI case-analysis result — replaces the (hidden) webview while
+                            streaming or done. Fully opaque so the ServiceNow page can't
+                            bleed through. */}
+                        {(analyzeStatus === 'streaming' || analyzeStatus === 'done') && (
                             <div className="absolute inset-0 bg-white dark:bg-slate-900 flex flex-col animate-fade-in">
                                 <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 shrink-0">
                                     <div className="flex items-center gap-2">

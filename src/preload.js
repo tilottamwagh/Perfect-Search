@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('perfectsearch', {
     getAiProviders: () => ipcRenderer.invoke('ai:providers'),
     saveAiKey: (providerId, apiKey, modelId) => ipcRenderer.invoke('ai:saveKey', providerId, apiKey, modelId),
     saveAiModel: (providerId, modelId) => ipcRenderer.invoke('ai:saveModel', providerId, modelId),
+    saveAiReasoning: (providerId, level) => ipcRenderer.invoke('ai:saveReasoning', providerId, level),
     clearAiKey: (providerId) => ipcRenderer.invoke('ai:clearKey', providerId),
     setActiveAiProvider: (providerId) => ipcRenderer.invoke('ai:setActive', providerId),
     aiSynthesize: (requestId, query, results, onChunk) => {

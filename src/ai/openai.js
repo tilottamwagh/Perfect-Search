@@ -97,7 +97,7 @@ async function* sseLines(resp) {
     }
 }
 
-async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt, picked: prePicked }) {
+async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt, picked: prePicked, reasoning }) {
     // Phase 2: ai/index.js pre-selects + enriches; use that if provided.
     const picked = Array.isArray(prePicked) ? prePicked : selectSources(results);
     if (picked.length === 0) throw new Error('NO_SOURCES');
@@ -121,7 +121,7 @@ async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt
     // `temperature` is still tolerated everywhere, but o-series and
     // gpt-5 family ignore it. Skip sending it for those to avoid any
     // "unsupported parameter" surprises with future variants.
-    const rejectsTemperature = /^(o\d|gpt-5)/i.test(modelId);
+    const isReasoningModel = /^(o\d|gpt-5)/i.test(modelId);
     const reqBody = {
         model: modelId,
         stream: true,
@@ -132,7 +132,12 @@ async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt
             { role: 'user', content: userText },
         ],
     };
-    if (!rejectsTemperature) reqBody.temperature = 0.4;
+    if (!isReasoningModel) reqBody.temperature = 0.4;
+    // Reasoning effort (minimal/low/medium/high) — only for gpt-5 + o-series.
+    // Higher = deeper thinking, slower, more tokens. Default medium.
+    if (isReasoningModel && reasoning && ['minimal', 'low', 'medium', 'high'].includes(reasoning)) {
+        reqBody.reasoning_effort = reasoning;
+    }
 
     const resp = await fetch(API_URL, {
         method: 'POST',
@@ -156,12 +161,28 @@ async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt
     }
 
     const elapsed = Date.now() - startedAt;
-    logger.success('Phase 6', `[openai:${modelId}] done in ${elapsed}ms · in=${usage?.prompt_tokens} out=${usage?.completion_tokens}`);
+
+    // Some streamed responses (and some models) don't return a usage chunk
+    // even with stream_options.include_usage. Rather than report null usage —
+    // which makes the cost dashboard record nothing — estimate from character
+    // counts (~4 chars per token is the standard rough heuristic). The result
+    // is flagged `estimated:true` so the dashboard can mark it.
+    let finalUsage;
+    if (usage && (usage.prompt_tokens || usage.completion_tokens)) {
+        finalUsage = { input_tokens: usage.prompt_tokens, output_tokens: usage.completion_tokens, total_tokens: usage.total_tokens };
+    } else {
+        const inEst = Math.ceil((sysText.length + userText.length) / 4);
+        const outEst = Math.ceil(fullText.length / 4);
+        finalUsage = { input_tokens: inEst, output_tokens: outEst, total_tokens: inEst + outEst, estimated: true };
+        logger.info('Phase 6', `[openai:${modelId}] no usage from API — estimated in≈${inEst} out≈${outEst}`);
+    }
+    logger.success('Phase 6', `[openai:${modelId}] done in ${elapsed}ms · in=${finalUsage.input_tokens} out=${finalUsage.output_tokens}${finalUsage.estimated ? ' (est)' : ''}`);
 
     return {
         text: fullText,
         picked,
-        usage: usage ? { input_tokens: usage.prompt_tokens, output_tokens: usage.completion_tokens, total_tokens: usage.total_tokens } : null,
+        usage: finalUsage,
+        _origUsage: usage ? { input_tokens: usage.prompt_tokens, output_tokens: usage.completion_tokens, total_tokens: usage.total_tokens } : null,
         model: modelId,
         elapsedMs: elapsed,
     };

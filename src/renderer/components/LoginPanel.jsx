@@ -30,12 +30,14 @@ const PROVIDER_COLOR = {
     rose: 'from-rose-50/60 via-white to-pink-50/40 dark:from-rose-950/30 dark:via-slate-900/60 dark:to-pink-950/20 border-rose-200/70 dark:border-rose-800/40',
     emerald: 'from-emerald-50/60 via-white to-teal-50/40 dark:from-emerald-950/30 dark:via-slate-900/60 dark:to-emerald-950/20 border-emerald-200/70 dark:border-emerald-800/40',
     sky: 'from-sky-50/60 via-white to-cyan-50/40 dark:from-sky-950/30 dark:via-slate-900/60 dark:to-cyan-950/20 border-sky-200/70 dark:border-sky-800/40',
+    cyan: 'from-cyan-50/60 via-white to-teal-50/40 dark:from-cyan-950/30 dark:via-slate-900/60 dark:to-teal-950/20 border-cyan-200/70 dark:border-cyan-800/40',
 };
 const PROVIDER_BADGE = {
     amber: 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300',
     rose: 'bg-rose-100 text-rose-800 dark:bg-rose-500/20 dark:text-rose-300',
     emerald: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300',
     sky: 'bg-sky-100 text-sky-800 dark:bg-sky-500/20 dark:text-sky-300',
+    cyan: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-500/20 dark:text-cyan-300',
 };
 
 function AiProviderRow({ provider, active, onChange }) {
@@ -76,6 +78,20 @@ function AiProviderRow({ provider, active, onChange }) {
         onChange();
     };
 
+    // Custom-model entry: when the user picks "Custom…" from the dropdown we
+    // reveal a free text field so they can type ANY model id the provider
+    // supports — including brand-new ones not in our curated list. The model
+    // list goes stale fast; this future-proofs it.
+    const modelIds = Array.isArray(provider.models) ? provider.models.map((m) => m.id) : [];
+    const isCustomModel = Boolean(selectedModel) && !modelIds.includes(selectedModel);
+    const [customMode, setCustomMode] = React.useState(isCustomModel);
+    const [customDraft, setCustomDraft] = React.useState(isCustomModel ? selectedModel : '');
+
+    React.useEffect(() => {
+        // Keep custom mode in sync if the saved model isn't in the list.
+        if (isCustomModel) { setCustomMode(true); setCustomDraft(selectedModel); }
+    }, [isCustomModel, selectedModel]);
+
     const changeModel = async (newModel) => {
         setSelectedModel(newModel);
         // If the user already has a key configured, persist the model change
@@ -86,6 +102,33 @@ function AiProviderRow({ provider, active, onChange }) {
             setTimeout(() => setMsg(null), 2000);
             onChange();
         }
+    };
+
+    const onModelSelect = (val) => {
+        if (val === '__custom__') {
+            setCustomMode(true);
+            setCustomDraft(isCustomModel ? selectedModel : '');
+            return;
+        }
+        setCustomMode(false);
+        changeModel(val);
+    };
+
+    const commitCustomModel = async () => {
+        const m = customDraft.trim();
+        if (!m) return;
+        await changeModel(m);
+    };
+
+    // Reasoning effort (OpenAI gpt-5 / o-series only).
+    const [reasoning, setReasoning] = React.useState(provider.reasoning || 'medium');
+    React.useEffect(() => { setReasoning(provider.reasoning || 'medium'); }, [provider.reasoning]);
+    const changeReasoning = async (level) => {
+        setReasoning(level);
+        await window.perfectsearch.saveAiReasoning(provider.id, level);
+        setMsg({ ok: true, text: `Reasoning set to ${level}` });
+        setTimeout(() => setMsg(null), 2000);
+        onChange();
     };
 
     const gradient = PROVIDER_COLOR[provider.color] || PROVIDER_COLOR.amber;
@@ -168,19 +211,66 @@ function AiProviderRow({ provider, active, onChange }) {
                     </div>
 
                     {Array.isArray(provider.models) && provider.models.length > 0 && (
-                        <div className="flex items-center gap-2">
-                            <label className="text-[11px] text-slate-500 dark:text-slate-400 font-medium shrink-0">Model</label>
-                            <select
-                                value={selectedModel}
-                                onChange={(e) => changeModel(e.target.value)}
-                                className="flex-1 text-xs font-mono px-2 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-indigo-500 dark:focus:border-indigo-400"
-                            >
-                                {provider.models.map((m) => (
-                                    <option key={m.id} value={m.id}>
-                                        {m.label} · {m.tier}
-                                    </option>
-                                ))}
-                            </select>
+                        <div className="flex flex-col gap-1.5">
+                            <div className="flex items-center gap-2">
+                                <label className="text-[11px] text-slate-500 dark:text-slate-400 font-medium shrink-0">Model</label>
+                                <select
+                                    value={customMode ? '__custom__' : selectedModel}
+                                    onChange={(e) => onModelSelect(e.target.value)}
+                                    className="flex-1 text-xs font-mono px-2 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-indigo-500 dark:focus:border-indigo-400"
+                                >
+                                    {provider.models.map((m) => (
+                                        <option key={m.id} value={m.id}>
+                                            {m.label} · {m.tier}
+                                        </option>
+                                    ))}
+                                    <option value="__custom__">✏️ Custom model…</option>
+                                </select>
+                            </div>
+                            {customMode && (
+                                <div className="flex items-center gap-2 pl-[44px]">
+                                    <input
+                                        type="text"
+                                        value={customDraft}
+                                        onChange={(e) => setCustomDraft(e.target.value)}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') commitCustomModel(); }}
+                                        placeholder="exact model id, e.g. gemini-3.0-pro"
+                                        className="flex-1 text-xs font-mono px-2 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-indigo-500 dark:focus:border-indigo-400"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={commitCustomModel}
+                                        disabled={!customDraft.trim() || customDraft.trim() === selectedModel}
+                                        className="text-[11px] text-white px-3 py-1.5 rounded-md font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40"
+                                    >
+                                        Use
+                                    </button>
+                                </div>
+                            )}
+                            {customMode && (
+                                <p className="text-[10px] text-slate-400 dark:text-slate-500 pl-[44px]">
+                                    Type any model the provider supports — the exact API id. If it's wrong, synthesis will return a clear error.
+                                </p>
+                            )}
+
+                            {/* Reasoning effort — only for OpenAI gpt-5 / o-series.
+                                Mirrors the "Reasoning: Medium" control in IDE-style
+                                settings. Higher = deeper thinking, slower, more tokens. */}
+                            {provider.supportsReasoning && /^(o\d|gpt-5)/i.test(selectedModel) && (
+                                <div className="flex items-center gap-2">
+                                    <label className="text-[11px] text-slate-500 dark:text-slate-400 font-medium shrink-0">Reasoning</label>
+                                    <select
+                                        value={reasoning}
+                                        onChange={(e) => changeReasoning(e.target.value)}
+                                        className="text-xs px-2 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-indigo-500 dark:focus:border-indigo-400"
+                                    >
+                                        <option value="minimal">Minimal — fastest, least thinking</option>
+                                        <option value="low">Low</option>
+                                        <option value="medium">Medium — balanced (default)</option>
+                                        <option value="high">High — deepest, slowest</option>
+                                    </select>
+                                </div>
+                            )}
                         </div>
                     )}
 

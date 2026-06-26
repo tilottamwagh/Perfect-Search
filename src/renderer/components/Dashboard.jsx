@@ -17,16 +17,25 @@ function Card({ label, agg }) {
 export default function Dashboard() {
     const [data, setData] = useState(null);
     const [busy, setBusy] = useState(false);
+    // Which metric the 30-day bar chart plots: tokens (default) or cost.
+    const [metric, setMetric] = useState('tok');
 
-    const load = useCallback(async () => {
-        setBusy(true);
+    const load = useCallback(async (silent = false) => {
+        if (!silent) setBusy(true);
         try {
             const r = await window.perfectsearch.usageSummary();
             if (r.success) setData({ summary: r.summary, pricing: r.pricing });
-        } finally { setBusy(false); }
+        } finally { if (!silent) setBusy(false); }
     }, []);
 
-    useEffect(() => { load(); }, [load]);
+    // Initial load + realtime auto-refresh: poll every 3s while the dashboard
+    // is open so token/cost data appears as AI calls happen, without needing a
+    // manual Refresh click. Silent refresh keeps the UI from flickering.
+    useEffect(() => {
+        load();
+        const id = setInterval(() => load(true), 3000);
+        return () => clearInterval(id);
+    }, [load]);
 
     const clearAll = useCallback(async () => {
         await window.perfectsearch.usageClear();
@@ -38,7 +47,9 @@ export default function Dashboard() {
     }
 
     const { summary } = data;
-    const maxCost = Math.max(0.0001, ...summary.series.map((s) => s.cost));
+    const showTok = metric === 'tok';
+    const valOf = (s) => (showTok ? (s.tok || 0) : (s.cost || 0));
+    const maxVal = Math.max(showTok ? 1 : 0.0001, ...summary.series.map(valOf));
     const features = Object.entries(summary.byFeature).sort((a, b) => b[1].cost - a[1].cost);
     const models = Object.entries(summary.byModel || {}).sort((a, b) => b[1].cost - a[1].cost);
 
@@ -51,7 +62,7 @@ export default function Dashboard() {
                         <p className="text-sm text-slate-500 dark:text-slate-400">Tokens generated and money spent across all AI features.</p>
                     </div>
                     <div className="flex items-center gap-2">
-                        <button type="button" onClick={load} className="text-xs px-3 py-1.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200">Refresh</button>
+                        <button type="button" onClick={() => load(false)} disabled={busy} className="text-xs px-3 py-1.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 disabled:opacity-50">{busy ? 'Refreshing…' : 'Refresh'}</button>
                         <button type="button" onClick={clearAll} className="text-xs px-3 py-1.5 rounded-md bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-300 hover:bg-red-100" title="Clear all usage records">Reset</button>
                     </div>
                 </div>
@@ -67,21 +78,46 @@ export default function Dashboard() {
                     <Card label="All time" agg={summary.all} />
                 </div>
 
-                {/* 30-day cost chart */}
+                {/* 30-day chart — toggle between tokens and cost */}
                 <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Daily spend — last 30 days</p>
-                    <div className="flex items-end gap-[3px] h-32">
-                        {summary.series.map((s) => (
-                            <div key={s.day} className="flex-1 group relative flex flex-col justify-end" title={`${s.day}: ${fmtUsd(s.cost)} · ${fmtTok(s.tok)} tok`}>
-                                <div
-                                    className="w-full rounded-t bg-indigo-400/70 dark:bg-indigo-500/70 group-hover:bg-indigo-500"
-                                    style={{ height: `${Math.max(2, (s.cost / maxCost) * 100)}%` }}
-                                />
-                            </div>
-                        ))}
+                    <div className="flex items-center justify-between mb-3">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            {showTok ? 'Tokens consumed' : 'Daily spend'} — last 30 days
+                        </p>
+                        <div className="inline-flex rounded-md overflow-hidden border border-slate-200 dark:border-slate-700 text-[11px]">
+                            <button
+                                type="button"
+                                onClick={() => setMetric('tok')}
+                                className={`px-2.5 py-1 font-medium ${showTok ? 'bg-indigo-600 text-white' : 'bg-transparent text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                            >
+                                Tokens
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setMetric('cost')}
+                                className={`px-2.5 py-1 font-medium ${!showTok ? 'bg-indigo-600 text-white' : 'bg-transparent text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                            >
+                                Cost
+                            </button>
+                        </div>
+                    </div>
+                    <div className="flex items-stretch gap-[3px] h-32">
+                        {summary.series.map((s) => {
+                            const v = valOf(s);
+                            const pct = v > 0 ? Math.max(6, (v / maxVal) * 100) : 0;
+                            return (
+                                <div key={s.day} className="flex-1 h-full group relative flex flex-col justify-end" title={`${s.day}: ${fmtTok(s.tok)} tok · ${fmtUsd(s.cost)}`}>
+                                    <div
+                                        className="w-full rounded-t bg-indigo-400/80 dark:bg-indigo-500/80 group-hover:bg-indigo-500 transition-all"
+                                        style={{ height: `${pct}%` }}
+                                    />
+                                </div>
+                            );
+                        })}
                     </div>
                     <div className="flex justify-between text-[10px] text-slate-400 mt-1">
                         <span>{summary.series[0] && summary.series[0].day.slice(5)}</span>
+                        <span className="text-slate-500">peak {showTok ? `${fmtTok(maxVal)} tok` : fmtUsd(maxVal)}</span>
                         <span>{summary.series[summary.series.length - 1] && summary.series[summary.series.length - 1].day.slice(5)}</span>
                     </div>
                 </div>

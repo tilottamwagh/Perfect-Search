@@ -576,6 +576,12 @@ function parseCaseRef(rawUrl) {
     const hex = '([0-9a-f]{32})';
     let table = null;
     let sysId = null;
+    let caseNumber = null;
+
+    // Synthetic scheme emitted by the renderer when only a case number is
+    // visible in the DOM (ServiceNow workspace split-pane hides the sys_id).
+    const numScheme = url.match(/^case-number:\/\/([A-Z0-9]+)$/i);
+    if (numScheme) return { sysId: null, table: null, caseNumber: numScheme[1].toUpperCase() };
 
     const record = url.match(new RegExp(`/record/([a-z0-9_]+)/${hex}`, 'i'));
     if (record) { table = record[1]; sysId = record[2]; }
@@ -590,7 +596,15 @@ function parseCaseRef(rawUrl) {
     }
     // Only trust real record tables, not UI pages like "nav_to" or "blank".
     if (table && /^(nav_to|blank|home|homepage|ui)$/i.test(table)) table = null;
-    return { sysId, table };
+
+    // Also try to extract a case/incident number directly from the URL for
+    // use as a fallback display label or lookup key.
+    if (!caseNumber) {
+        const nm = url.match(/\b(CSC|INC|RITM|CHG|PRB)\d{6,}/i);
+        if (nm) caseNumber = nm[0].toUpperCase();
+    }
+
+    return { sysId, table, caseNumber };
 }
 
 // Run an in-page fetch in an authenticated ServiceNow window and return parsed

@@ -27,6 +27,12 @@ const DEFAULT_PRICING = {
     'o4-mini': { in: 1.1, out: 4.4 },
     'text-embedding-3-small': { in: 0.02, out: 0 },
     'text-embedding-3-large': { in: 0.13, out: 0 },
+    // DeepSeek — very cheap (ballpark, USD per 1M tokens; verify at
+    // api-docs.deepseek.com/quick_start/pricing for your account).
+    'deepseek-v4-pro': { in: 0.5, out: 1.5 },
+    'deepseek-v4-flash': { in: 0.15, out: 0.5 },
+    'deepseek-reasoner': { in: 0.55, out: 2.2 },
+    'deepseek-chat': { in: 0.15, out: 0.5 },
     default: { in: 1, out: 3 },
 };
 

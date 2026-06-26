@@ -198,27 +198,47 @@ async function executeTool(name, args, ctx) {
     return { error: `unknown tool: ${name}` };
 }
 
+// Per-provider endpoint + request-shape config. The Expert loop works on any
+// OpenAI-compatible chat-completions API that also supports function calling:
+// OpenAI itself, DeepSeek (api.deepseek.com), and Agent Router. We resolve the
+// URL + token-param style from the active provider rather than hardcoding it.
+function providerConfig(providerId, model) {
+    if (providerId === 'deepseek') {
+        const base = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
+        return { url: `${base}/chat/completions`, useMaxCompletion: false, label: 'DeepSeek', defaultModel: 'deepseek-v4-pro' };
+    }
+    if (providerId === 'agentrouter') {
+        const base = process.env.AGENTROUTER_BASE_URL || 'https://agentrouter.org/v1';
+        return { url: `${base}/chat/completions`, useMaxCompletion: false, label: 'Agent Router', defaultModel: 'claude-opus-4-6' };
+    }
+    // openai (default)
+    return { url: API_URL, useMaxCompletion: true, label: 'OpenAI', defaultModel: 'gpt-5-mini' };
+}
+
 // One streaming step: accumulates content + any tool_calls from the SSE stream.
-async function streamStep({ apiKey, model, messages, tools, onChunk }) {
+async function streamStep({ apiKey, model, messages, tools, onChunk, cfg }) {
+    const c = cfg || providerConfig('openai', model);
     const rejectsTemperature = /^(o\d|gpt-5)/i.test(model);
     const body = {
         model,
         stream: true,
         stream_options: { include_usage: true },
-        max_completion_tokens: 4096,
         messages,
     };
+    // OpenAI uses max_completion_tokens; DeepSeek / others use max_tokens.
+    if (c.useMaxCompletion) body.max_completion_tokens = 4096;
+    else body.max_tokens = 4096;
     if (tools) { body.tools = tools; body.tool_choice = 'auto'; }
     if (!rejectsTemperature) body.temperature = 0.3;
 
-    const resp = await fetch(API_URL, {
+    const resp = await fetch(c.url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
         body: JSON.stringify(body),
     });
     if (!resp.ok) {
         const errBody = await resp.text();
-        throw new Error(`OpenAI HTTP ${resp.status}: ${errBody.substring(0, 400)}`);
+        throw new Error(`${c.label} HTTP ${resp.status}: ${errBody.substring(0, 400)}`);
     }
 
     let content = '';
@@ -251,11 +271,16 @@ async function runExpertAgent({ messages, systemPrompt, onChunk, onEvent, curren
         ? tokenStore.getActiveAiProvider()
         : (tokenStore.hasAiKey('openai') ? 'openai' : (tokenStore.hasAiKey('agentrouter') ? 'agentrouter' : null));
     if (!providerId) throw new Error('AI_NOT_CONFIGURED');
-    if (providerId !== 'openai' && providerId !== 'agentrouter') {
-        throw new Error('Ask AI Expert (with tools) currently requires the OpenAI provider. Switch your active AI provider to OpenAI in Settings.');
+    // The Expert loop needs a provider with OpenAI-style function calling.
+    // OpenAI, DeepSeek, and Agent Router qualify. Anthropic/Gemini use a
+    // different tool-call wire format and aren't supported here yet.
+    const TOOL_CAPABLE = ['openai', 'deepseek', 'agentrouter'];
+    if (!TOOL_CAPABLE.includes(providerId)) {
+        throw new Error(`Ask AI Expert (with tools) needs a function-calling provider — OpenAI, DeepSeek, or Agent Router. Your active provider is ${providerId}. Switch to one of those in Settings (DeepSeek is cheap and works well here).`);
     }
     const apiKey = tokenStore.getAiKey(providerId);
-    const model = tokenStore.getAiModel(providerId) || 'gpt-5-mini';
+    const cfg = providerConfig(providerId);
+    const model = tokenStore.getAiModel(providerId) || cfg.defaultModel;
 
     const convo = [{ role: 'system', content: systemPrompt }, ...messages];
 
@@ -283,7 +308,7 @@ async function runExpertAgent({ messages, systemPrompt, onChunk, onEvent, curren
     };
 
     for (let iter = 0; iter < MAX_ITERATIONS; iter += 1) {
-        const step = await streamStep({ apiKey, model, messages: convo, tools: TOOL_SCHEMAS, onChunk });
+        const step = await streamStep({ apiKey, model, messages: convo, tools: TOOL_SCHEMAS, onChunk, cfg });
         recordStep(step);
         if (step.toolCalls.length === 0) {
             logger.success('Phase 8', `Expert agent answered after ${iter} tool round(s); sources=${ctx.sources.length}`);
@@ -303,7 +328,7 @@ async function runExpertAgent({ messages, systemPrompt, onChunk, onEvent, curren
     // Safety net: force a final answer without more tools.
     if (onEvent) try { onEvent({ type: 'status', text: 'wrapping up' }); } catch (_) {}
     const finalConvo = [...convo, { role: 'user', content: 'You have gathered enough. Give your best analysis and next steps now, citing sources with [n].' }];
-    const final = await streamStep({ apiKey, model, messages: finalConvo, tools: null, onChunk });
+    const final = await streamStep({ apiKey, model, messages: finalConvo, tools: null, onChunk, cfg });
     recordStep(final);
     return { text: final.content, sources: ctx.sources, usages: ctx.usages, provider: providerId, model };
 }

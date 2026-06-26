@@ -9,13 +9,18 @@ const DEFAULT_MODEL = process.env.OMNISEARCH_GEMINI_MODEL || 'gemini-2.5-flash';
 const API_HOST = 'https://generativelanguage.googleapis.com';
 
 const MODELS = [
-    // Current Gemini 2.5 family
+    // Gemini 2.5 family (current GA)
     { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro — top reasoning, premium', tier: 'premium', supportsWeb: true },
     { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — fast & free, recommended', tier: 'standard', supportsWeb: true },
     { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite — cheapest, fastest', tier: 'fast', supportsWeb: true },
+    // Preview / latest-pointer aliases (Google rolls newer snapshots behind
+    // these; they may or may not be enabled on a given key — try them, and if
+    // unavailable you'll get a clear 404 and can pick a GA model).
+    { id: 'gemini-2.5-pro-preview', label: 'Gemini 2.5 Pro Preview — newest Pro snapshot', tier: 'preview', supportsWeb: true },
+    { id: 'gemini-2.5-flash-preview', label: 'Gemini 2.5 Flash Preview — newest Flash snapshot', tier: 'preview', supportsWeb: true },
     // Gemini 2.0 — pin to dated stable build (the bare 2.0-flash alias was retired)
     { id: 'gemini-2.0-flash-001', label: 'Gemini 2.0 Flash 001 — proven stable', tier: 'standard', supportsWeb: true },
-    { id: 'gemini-2.0-flash-lite-001', label: 'Gemini 2.0 Flash-Lite 001 — cheap legacy', tier: 'fast', supportsWeb: true },
+    { id: 'gemini-2.0-flash-lite-001', label: 'Gemini 2.0 Flash-Lite 001 — cheap', tier: 'fast', supportsWeb: true },
     // Legacy Gemini 1.5 — pin to dated stable build (bare aliases were retired)
     { id: 'gemini-1.5-pro-002', label: 'Gemini 1.5 Pro 002 — legacy premium', tier: 'legacy', supportsWeb: true },
     { id: 'gemini-1.5-flash-002', label: 'Gemini 1.5 Flash 002 — legacy workhorse', tier: 'legacy', supportsWeb: true },
@@ -210,12 +215,24 @@ async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt
         throw new Error(userMsg);
     }
 
-    logger.success('Phase 6', `[gemini:${modelId}] done in ${elapsed}ms · in=${usage?.promptTokenCount} out=${usage?.candidatesTokenCount} · ${chunkCount} chunks, ${textPartCount} text parts`);
+    // Gemini's streamed responses usually include usageMetadata, but not
+    // always. Fall back to a char-based estimate (~4 chars/token) so the
+    // cost dashboard never records zero for a successful answer.
+    let finalUsage;
+    if (usage && (usage.promptTokenCount || usage.candidatesTokenCount)) {
+        finalUsage = { input_tokens: usage.promptTokenCount, output_tokens: usage.candidatesTokenCount, total_tokens: usage.totalTokenCount };
+    } else {
+        const inEst = Math.ceil((sysText.length + userText.length) / 4);
+        const outEst = Math.ceil(fullText.length / 4);
+        finalUsage = { input_tokens: inEst, output_tokens: outEst, total_tokens: inEst + outEst, estimated: true };
+        logger.info('Phase 6', `[gemini:${modelId}] no usageMetadata — estimated in≈${inEst} out≈${outEst}`);
+    }
+    logger.success('Phase 6', `[gemini:${modelId}] done in ${elapsed}ms · in=${finalUsage.input_tokens} out=${finalUsage.output_tokens}${finalUsage.estimated ? ' (est)' : ''} · ${chunkCount} chunks, ${textPartCount} text parts`);
 
     return {
         text: fullText,
         picked,
-        usage: usage ? { input_tokens: usage.promptTokenCount, output_tokens: usage.candidatesTokenCount, total_tokens: usage.totalTokenCount } : null,
+        usage: finalUsage,
         model: modelId,
         elapsedMs: elapsed,
     };

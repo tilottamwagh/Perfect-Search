@@ -98,6 +98,17 @@ const TokenStore = {
         return store.get(`ai.${providerId}.model`) || null;
     },
 
+    // Per-provider reasoning effort (minimal/low/medium/high). Only meaningful
+    // for OpenAI gpt-5 + o-series reasoning models; ignored by other models.
+    saveAiReasoning(providerId, level) {
+        if (level) store.set(`ai.${providerId}.reasoning`, level);
+        else store.delete(`ai.${providerId}.reasoning`);
+    },
+
+    getAiReasoning(providerId) {
+        return store.get(`ai.${providerId}.reasoning`) || null;
+    },
+
     // Per-connector configuration (instance URLs, etc.). Needed because the
     // packaged installer can't read a .env file — each user has their own
     // ServiceNow / Confluence instance and must enter it in Settings.

@@ -2,17 +2,18 @@ const anthropic = require('./anthropic');
 const gemini = require('./gemini');
 const openai = require('./openai');
 const agentrouter = require('./agentrouter');
+const deepseek = require('./deepseek');
 const agent = require('./agent');
 const { selectSources } = require('./prompt');
 const tokenStore = require('../auth/tokenStore');
 const logger = require('../utils/logger');
 
-const PROVIDERS = { anthropic, gemini, openai, agentrouter };
+const PROVIDERS = { anthropic, gemini, openai, agentrouter, deepseek };
 // Order controls the auto-fallback chain when no provider is explicitly
 // selected: pick the first one with a saved key. Anthropic and Gemini come
 // first because they support Web Research; the OpenAI-compat providers
-// (OpenAI itself, Agent Router) come after.
-const ORDER = ['anthropic', 'gemini', 'openai', 'agentrouter'];
+// (OpenAI itself, DeepSeek, Agent Router) come after.
+const ORDER = ['anthropic', 'gemini', 'openai', 'deepseek', 'agentrouter'];
 
 function listProviders() {
     return ORDER.map((id) => {
@@ -22,6 +23,9 @@ function listProviders() {
             ...p.META,
             configured: tokenStore.hasAiKey(id),
             activeModel: userModel || p.META.defaultModel,
+            reasoning: tokenStore.getAiReasoning(id) || 'medium',
+            // Reasoning effort only applies to OpenAI's gpt-5 / o-series.
+            supportsReasoning: id === 'openai',
         };
     });
 }
@@ -35,10 +39,14 @@ function resolveActiveProvider() {
     return null;
 }
 
-async function testKey(providerId, apiKey) {
+async function testKey(providerId, apiKey, model) {
     const p = PROVIDERS[providerId];
     if (!p) return { ok: false, error: `Unknown provider: ${providerId}` };
-    return p.testKey(apiKey);
+    // Pass the user-selected model so validation hits the model they'll
+    // actually use (e.g. deepseek-v4-flash) rather than the adapter default,
+    // which they might not have access to. Adapters ignore the 2nd arg if
+    // they don't support it.
+    return p.testKey(apiKey, model);
 }
 
 async function synthesize({ query, results, onChunk }) {
@@ -98,37 +106,66 @@ async function synthesize({ query, results, onChunk }) {
         }
     }
 
-    // Try the agent-augmented system prompt first. If the provider returns
-    // empty text (Gemini safety filter, OpenAI content-policy refusal, etc.)
-    // fall back ONCE to the static SYSTEM_PROMPT — narrower, less likely to
-    // trip safety heuristics on enterprise-content searches. Without this
-    // fallback the UI hangs on "Reading sources…" forever.
-    let result;
-    try {
-        result = await adapter.synthesize({
-            query,
-            results,                  // kept for backward compat — adapter ignores when picked is set
-            picked: enrichedPicked,   // ← NEW: pre-selected + enriched, adapter skips its own selectSources
-            apiKey, onChunk, model, systemPrompt,
-        });
-    } catch (err) {
-        const msg = String(err?.message || '');
-        const isEmpty = /returned no answer text|NO_TEXT|finishReason=SAFETY|safety filter|content[_-]?policy/i.test(msg);
-        const hadAgentPrompt = Boolean(systemPrompt);
-        if (isEmpty && hadAgentPrompt) {
-            logger.warn('Phase 6', `Adapter rejected agent prompt — retrying with static SYSTEM_PROMPT (${msg.slice(0, 120)})`);
-            result = await adapter.synthesize({
-                query,
-                results,
-                picked: enrichedPicked,
-                apiKey, onChunk, model /* no systemPrompt → static fallback */,
-            });
-            if (result) result.agentFallback = true;
-        } else {
+    // A failure is "recoverable" (worth retrying with a different prompt or a
+    // different provider) when the model returned no usable text — Gemini's
+    // empty-response / safety-filter, OpenAI content-policy refusals, etc.
+    // Genuine errors (bad key, network down) are NOT recoverable and rethrow.
+    const isRecoverable = (msg) =>
+        /returned no answer text|returned an empty response|no data chunks|NO_TEXT|finishReason=SAFETY|safety filter|content[_-]?policy|blocked the (prompt|answer)/i.test(String(msg || ''));
+
+    // Try one provider: agent-augmented prompt first, then a static-prompt
+    // retry on the same provider if the agent prompt was rejected.
+    const tryProvider = async (pid) => {
+        const ad = PROVIDERS[pid];
+        const key = tokenStore.getAiKey(pid);
+        if (!ad || !key) throw new Error('AI_NOT_CONFIGURED');
+        const mdl = tokenStore.getAiModel(pid) || ad.META.defaultModel;
+        const reasoning = tokenStore.getAiReasoning(pid) || 'medium';
+        try {
+            return await ad.synthesize({ query, results, picked: enrichedPicked, apiKey: key, onChunk, model: mdl, systemPrompt, reasoning });
+        } catch (err) {
+            if (isRecoverable(err?.message) && systemPrompt) {
+                logger.warn('Phase 6', `[${pid}] rejected agent prompt — retrying with static SYSTEM_PROMPT (${String(err.message).slice(0, 100)})`);
+                const r = await ad.synthesize({ query, results, picked: enrichedPicked, apiKey: key, onChunk, model: mdl, reasoning /* static prompt */ });
+                if (r) r.agentFallback = true;
+                return r;
+            }
             throw err;
         }
+    };
+
+    // Active provider first. If it fails recoverably (the recurring Gemini
+    // empty-response on enterprise content), automatically fall through to the
+    // next configured provider — OpenAI / Anthropic handle this content fine —
+    // so the user gets an answer instead of a red error. Genuinely-broken
+    // providers (no key) are skipped; non-recoverable errors rethrow.
+    let result = null;
+    let usedProvider = providerId;
+    const tried = [];
+    const fallbackOrder = [providerId, ...ORDER.filter((p) => p !== providerId && tokenStore.hasAiKey(p))];
+    let lastErr = null;
+    for (const pid of fallbackOrder) {
+        try {
+            tried.push(pid);
+            result = await tryProvider(pid);
+            usedProvider = pid;
+            if (pid !== providerId) {
+                logger.success('Phase 6', `Auto-fell back from ${providerId} to ${pid} after recoverable failure`);
+                result.providerFallback = { from: providerId, to: pid };
+            }
+            break;
+        } catch (err) {
+            lastErr = err;
+            if (isRecoverable(err?.message) && fallbackOrder.indexOf(pid) < fallbackOrder.length - 1) {
+                logger.warn('Phase 6', `[${pid}] failed recoverably — trying next provider (${String(err.message).slice(0, 80)})`);
+                continue; // try the next configured provider
+            }
+            throw err; // non-recoverable, or no more providers to try
+        }
     }
-    return { ...result, provider: providerId, intent: intentInfo, enrichment: enrichmentStats };
+    if (!result) throw (lastErr || new Error('AI synthesis failed across all configured providers.'));
+
+    return { ...result, provider: usedProvider, intent: intentInfo, enrichment: enrichmentStats };
 }
 
 // Analyze a single ServiceNow case (case data + screenshots + knowledge base).
@@ -161,12 +198,15 @@ async function extractCaseQueries(caseText) {
     const apiKey = tokenStore.getAiKey(providerId);
     if (!apiKey) return [];
     const model = tokenStore.getAiModel(providerId) || adapter.META.defaultModel;
-    const sys = 'You write search queries to find solutions for an enterprise support issue. Given the case text, output 3-4 short, high-signal queries: exact error phrases, product + feature names, and the core symptom. Output ONLY a JSON array of strings — no prose, no markdown.';
-    const usr = `Case text:\n${String(caseText || '').slice(0, 4000)}\n\nReturn a JSON array of 3-4 search query strings.`;
+    const sys = 'You write search queries to find solutions for an enterprise support issue. Given the case text, output 3-4 short, high-signal queries: exact error phrases, product + feature names, and the core symptom. Output ONLY a JSON array of strings — no prose, no markdown, no code fences.';
+    const usr = `Case text:\n${String(caseText || '').slice(0, 4000)}\n\nReturn a JSON array of 3-4 search query strings. Example: ["query one","query two","query three"]`;
     try {
-        const out = await adapter.chat(sys, usr, { apiKey, model, maxTokens: 200 });
-        const m = String(out).match(/\[[\s\S]*\]/);
-        const arr = JSON.parse(m ? m[0] : out);
+        const out = String(await adapter.chat(sys, usr, { apiKey, model, maxTokens: 400 }) || '');
+        if (!out.trim()) return [];
+        // Strip code fences and reasoning preamble before the JSON array
+        const m = out.match(/\[[\s\S]*?\]/);
+        if (!m) return [];
+        const arr = JSON.parse(m[0]);
         return Array.isArray(arr) ? arr.filter((s) => typeof s === 'string' && s.trim().length > 1).slice(0, 4) : [];
     } catch (err) {
         logger.warn('Phase 7', `Case query extraction failed (using short description only): ${err.message}`);

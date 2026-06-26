@@ -524,7 +524,7 @@ ipcMain.handle('ai:saveKey', async (_event, providerId, apiKey, modelId) => {
   }
   try {
     const ai = require('./ai');
-    const probe = await ai.testKey(providerId, apiKey.trim());
+    const probe = await ai.testKey(providerId, apiKey.trim(), modelId);
     if (!probe.ok) return { success: false, error: probe.error || 'Key did not respond OK' };
     tokenStore.saveAiKey(providerId, apiKey.trim());
     if (modelId) tokenStore.saveAiModel(providerId, modelId);
@@ -538,6 +538,13 @@ ipcMain.handle('ai:saveKey', async (_event, providerId, apiKey, modelId) => {
 ipcMain.handle('ai:saveModel', async (_event, providerId, modelId) => {
   if (!providerId) return { success: false, error: 'Provider required' };
   tokenStore.saveAiModel(providerId, modelId);
+  return { success: true };
+});
+
+ipcMain.handle('ai:saveReasoning', async (_event, providerId, level) => {
+  if (!providerId) return { success: false, error: 'Provider required' };
+  const allowed = ['minimal', 'low', 'medium', 'high'];
+  tokenStore.saveAiReasoning(providerId, allowed.includes(level) ? level : 'medium');
   return { success: true };
 });
 
@@ -588,6 +595,7 @@ ipcMain.handle('ai:synthesizeWeb', async (event, { requestId, query }) => {
         if (!event.sender.isDestroyed()) event.sender.send(channel, delta);
       },
     });
+    try { if (result.usage) require('./ai/usage').record({ feature: 'web-research', model: result.model, inTok: result.usage.input_tokens, outTok: result.usage.output_tokens }); } catch (_) { /* non-fatal */ }
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: error.message };
@@ -607,10 +615,7 @@ ipcMain.handle('servicenow:analyzeCase', async (event, { requestId, url, webCont
     const channel = `ai:chunk:${requestId}`;
     const dv = (v) => (v && typeof v === 'object') ? (v.display_value || v.value || '') : (v == null ? '' : String(v));
 
-    const ref = parseCaseRef(url);
-    if (!ref.sysId) {
-      return { success: false, error: 'Couldn\'t find a case in the current ServiceNow view. Open a specific case (so its URL has a sys_id), then click Analyze case.' };
-    }
+    let ref = parseCaseRef(url);
 
     const snTokens = tokenStore.get('servicenow');
     const baseUrl = (snTokens && snTokens.baseUrl) || process.env.SERVICENOW_BASE_URL;
@@ -626,6 +631,74 @@ ipcMain.handle('servicenow:analyzeCase', async (event, { requestId, url, webCont
     }
     if (!win) {
       return { success: false, error: 'ServiceNow isn\'t connected. Open Settings → ServiceNow → Connect, then try again.' };
+    }
+
+    // When the webview is on a list view (sn_*_list.do), the case form loads
+    // in an inner child frame — the renderer can't cross that frame boundary.
+    // Use Electron's WebFrameMain API to iterate ALL frames of the webview
+    // webContents and probe each one for g_form / sys_id in URL.
+    if (!ref.sysId && webContentsId != null) {
+      try {
+        const { webContents: wc2mod } = require('electron');
+        const wc = wc2mod.fromId(webContentsId);
+        if (wc && !wc.isDestroyed()) {
+          const collectFrames = (frame) => {
+            const list = [frame];
+            for (const child of (frame.frames || [])) list.push(...collectFrames(child));
+            return list;
+          };
+          const frames = collectFrames(wc.mainFrame);
+          logger.info('Phase 7', `Scanning ${frames.length} webview frame(s) for case ref`);
+          for (const frame of frames) {
+            try {
+              const found = await frame.executeJavaScript(`(function(){
+                if (window.g_form && window.g_form.getUniqueValue) {
+                  try { var s=window.g_form.getUniqueValue(); if(s&&s.length===32) return 'sys_id://'+s; } catch(_){}
+                }
+                try {
+                  var d=decodeURIComponent(decodeURIComponent(location.href));
+                  var m=d.match(/sys_id=([0-9a-f]{32})/i)||d.match(/\\/record\\/[a-z0-9_]+\\/([0-9a-f]{32})/i);
+                  if(m) return location.href;
+                } catch(_){}
+                var numM=(document.title||'').match(/\\b(CSC|INC|RITM|CHG|PRB)\\d{4,}/i);
+                if(numM) return 'case-number://'+numM[0].toUpperCase();
+                return '';
+              })()`);
+              if (found && found.length > 0) {
+                logger.info('Phase 7', `Frame scan found: ${found.slice(0, 80)}`);
+                const { parseCaseRef: pRef } = require('./connectors/servicenow');
+                const scanned = pRef(found);
+                if (scanned.sysId) { ref = scanned; break; }
+                if (scanned.caseNumber && !ref.caseNumber) ref = { ...ref, caseNumber: scanned.caseNumber };
+              }
+            } catch (_) { /* cross-origin frame — skip */ }
+          }
+        }
+      } catch (frameErr) {
+        logger.warn('Phase 7', `Frame scan failed: ${frameErr.message}`);
+      }
+    }
+
+    // Last resort: case number known but no sys_id → REST lookup by number.
+    if (!ref.sysId && ref.caseNumber) {
+      logger.info('Phase 7', `No sys_id found — looking up ${ref.caseNumber} via REST`);
+      try {
+        const { inPageJson } = require('./connectors/servicenow');
+        const table = /^INC/i.test(ref.caseNumber) ? 'incident' : 'sn_customerservice_case';
+        const lookupUrl = `${baseUrl}/api/now/table/${table}?sysparm_query=number=${ref.caseNumber}&sysparm_fields=sys_id&sysparm_limit=1`;
+        const res = await inPageJson(win, lookupUrl, 8000);
+        const firstResult = res && res.data && res.data.result && res.data.result[0];
+        if (firstResult && firstResult.sys_id) {
+          ref = { sysId: firstResult.sys_id, table, caseNumber: ref.caseNumber };
+          logger.info('Phase 7', `Resolved ${ref.caseNumber} → sys_id=${ref.sysId}`);
+        }
+      } catch (lookupErr) {
+        logger.warn('Phase 7', `Case number lookup failed: ${lookupErr.message}`);
+      }
+    }
+
+    if (!ref.sysId) {
+      return { success: false, error: `Couldn't detect which case is open. Click directly into the case record (open it fully, not just the split-panel preview) and try Analyze case again.` };
     }
 
     logger.info('Phase 7', `Analyze case requested: ${ref.table || 'sn_customerservice_case'}/${ref.sysId}`);
