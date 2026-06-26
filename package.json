@@ -1,8 +1,8 @@
 {
   "name": "perfectsearch",
   "productName": "PerfectSearch",
-  "version": "1.1.9",
-  "description": "Unified enterprise desktop search across Slack, Confluence, ServiceNow, Atlassian, Box, Jira, Datadog, AWS, and Ellucian Resources — with AI synthesis (Anthropic Claude, Google Gemini, OpenAI).",
+  "version": "1.2.0",
+  "description": "Unified enterprise desktop search across Slack, Confluence, ServiceNow, Atlassian, Box, Jira, Datadog, AWS, and Ellucian Resources — with AI synthesis (Anthropic Claude, Google Gemini, OpenAI, DeepSeek, AWS Bedrock).",
   "main": ".webpack/main",
   "private": true,
   "scripts": {
@@ -62,6 +62,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",
+    "@aws-sdk/client-bedrock-runtime": "^3.1075.0",
     "@tailwindcss/forms": "^0.5.11",
     "autoprefixer": "^10.5.0",
     "axios": "^1.16.1",

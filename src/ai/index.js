@@ -3,17 +3,19 @@ const gemini = require('./gemini');
 const openai = require('./openai');
 const agentrouter = require('./agentrouter');
 const deepseek = require('./deepseek');
+const bedrock = require('./bedrock');
 const agent = require('./agent');
 const { selectSources } = require('./prompt');
 const tokenStore = require('../auth/tokenStore');
 const logger = require('../utils/logger');
 
-const PROVIDERS = { anthropic, gemini, openai, agentrouter, deepseek };
+const PROVIDERS = { anthropic, gemini, openai, agentrouter, deepseek, bedrock };
 // Order controls the auto-fallback chain when no provider is explicitly
 // selected: pick the first one with a saved key. Anthropic and Gemini come
 // first because they support Web Research; the OpenAI-compat providers
-// (OpenAI itself, DeepSeek, Agent Router) come after.
-const ORDER = ['anthropic', 'gemini', 'openai', 'deepseek', 'agentrouter'];
+// (OpenAI itself, DeepSeek, Agent Router) come after. Bedrock last since it
+// requires multi-field credentials and may use temp SSO keys that expire.
+const ORDER = ['anthropic', 'gemini', 'openai', 'deepseek', 'agentrouter', 'bedrock'];
 
 function listProviders() {
     return ORDER.map((id) => {

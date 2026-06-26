@@ -4,6 +4,7 @@ const { parse } = require('node-html-parser');
 const { API_URL, sseLines } = require('../openai');
 const tokenStore = require('../../auth/tokenStore');
 const logger = require('../../utils/logger');
+const { BedrockRuntimeClient, ConverseStreamCommand } = require('@aws-sdk/client-bedrock-runtime');
 
 // ───────────────────────────────────────────────────────────────────────────
 // Ask AI Expert — agentic tool-use loop (Phase B)
@@ -264,6 +265,106 @@ async function streamStep({ apiKey, model, messages, tools, onChunk, cfg }) {
     return { content, toolCalls: toolCalls.filter(Boolean), finish, usage };
 }
 
+// Convert OpenAI-style tool schemas → Bedrock Converse toolConfig format.
+function toBedrockTools(schemas) {
+    if (!schemas) return undefined;
+    return {
+        tools: schemas.map((t) => ({
+            toolSpec: {
+                name: t.function.name,
+                description: t.function.description || '',
+                inputSchema: { json: t.function.parameters || {} },
+            },
+        })),
+    };
+}
+
+// Convert our flat convo array (system/user/assistant/tool) to Bedrock format.
+function toBedrockMessages(convo) {
+    const system = [];
+    const messages = [];
+    for (const m of convo) {
+        if (m.role === 'system') { system.push({ text: m.content || '' }); continue; }
+        if (m.role === 'user') { messages.push({ role: 'user', content: [{ text: m.content || '' }] }); continue; }
+        if (m.role === 'assistant') {
+            const content = [];
+            if (m.content) content.push({ text: m.content });
+            if (Array.isArray(m.tool_calls)) {
+                for (const tc of m.tool_calls) {
+                    let inp = {};
+                    try { inp = JSON.parse(tc.function.arguments || '{}'); } catch (_) {}
+                    content.push({ toolUse: { toolUseId: tc.id, name: tc.function.name, input: inp } });
+                }
+            }
+            messages.push({ role: 'assistant', content });
+            continue;
+        }
+        if (m.role === 'tool') {
+            // Bedrock expects tool results on a 'user' turn
+            let resultContent;
+            try { resultContent = JSON.parse(m.content); } catch (_) { resultContent = m.content; }
+            const lastMsg = messages[messages.length - 1];
+            if (lastMsg && lastMsg.role === 'user') {
+                lastMsg.content.push({ toolResult: { toolUseId: m.tool_call_id, content: [{ json: resultContent }] } });
+            } else {
+                messages.push({ role: 'user', content: [{ toolResult: { toolUseId: m.tool_call_id, content: [{ json: resultContent }] } }] });
+            }
+        }
+    }
+    return { system, messages };
+}
+
+// Bedrock Converse streaming step — native AWS SDK, supports tool use.
+async function bedrockStreamStep({ apiKey, model, convo, tools, onChunk }) {
+    const { parseCreds } = require('../bedrock'); // reuse credential parser
+    const creds = parseCreds(apiKey);
+    if (!creds) throw new Error('Invalid AWS credentials JSON');
+    const client = new BedrockRuntimeClient({
+        region: creds.region || 'us-east-1',
+        credentials: { accessKeyId: creds.accessKeyId, secretAccessKey: creds.secretAccessKey, ...(creds.sessionToken ? { sessionToken: creds.sessionToken } : {}) },
+    });
+    const { system, messages } = toBedrockMessages(convo);
+    const cmd = new ConverseStreamCommand({
+        modelId: model,
+        system,
+        messages,
+        inferenceConfig: { maxTokens: 4096, temperature: 0.3 },
+        ...(tools ? { toolConfig: toBedrockTools(tools) } : {}),
+    });
+    const resp = await client.send(cmd);
+
+    let content = '';
+    const toolCalls = [];
+    let currentToolUse = null;
+    let currentToolInput = '';
+    let usage = null;
+
+    for await (const event of resp.stream) {
+        if (event.contentBlockStart?.start?.toolUse) {
+            currentToolUse = event.contentBlockStart.start.toolUse;
+            currentToolInput = '';
+        } else if (event.contentBlockDelta?.delta?.toolUse?.input != null) {
+            currentToolInput += event.contentBlockDelta.delta.toolUse.input;
+        } else if (event.contentBlockDelta?.delta?.text) {
+            content += event.contentBlockDelta.delta.text;
+            if (onChunk) try { onChunk(event.contentBlockDelta.delta.text); } catch (_) {}
+        } else if (event.contentBlockStop && currentToolUse) {
+            let inp = {};
+            try { inp = JSON.parse(currentToolInput || '{}'); } catch (_) {}
+            toolCalls.push({
+                id: currentToolUse.toolUseId,
+                type: 'function',
+                function: { name: currentToolUse.name, arguments: JSON.stringify(inp) },
+            });
+            currentToolUse = null;
+            currentToolInput = '';
+        } else if (event.metadata?.usage) {
+            usage = { prompt_tokens: event.metadata.usage.inputTokens || 0, completion_tokens: event.metadata.usage.outputTokens || 0 };
+        }
+    }
+    return { content, toolCalls, usage };
+}
+
 // Run the full agent loop. Streams the final answer via onChunk; reports tool
 // activity via onEvent; returns { text, sources, provider, model }.
 async function runExpertAgent({ messages, systemPrompt, onChunk, onEvent, currentImages }) {
@@ -274,9 +375,9 @@ async function runExpertAgent({ messages, systemPrompt, onChunk, onEvent, curren
     // The Expert loop needs a provider with OpenAI-style function calling.
     // OpenAI, DeepSeek, and Agent Router qualify. Anthropic/Gemini use a
     // different tool-call wire format and aren't supported here yet.
-    const TOOL_CAPABLE = ['openai', 'deepseek', 'agentrouter'];
+    const TOOL_CAPABLE = ['openai', 'deepseek', 'agentrouter', 'bedrock'];
     if (!TOOL_CAPABLE.includes(providerId)) {
-        throw new Error(`Ask AI Expert (with tools) needs a function-calling provider — OpenAI, DeepSeek, or Agent Router. Your active provider is ${providerId}. Switch to one of those in Settings (DeepSeek is cheap and works well here).`);
+        throw new Error(`Ask AI Expert (with tools) needs a function-calling provider — OpenAI, DeepSeek, AWS Bedrock, or Agent Router. Your active provider is ${providerId}. Switch to one of those in Settings.`);
     }
     const apiKey = tokenStore.getAiKey(providerId);
     const cfg = providerConfig(providerId);
@@ -303,12 +404,15 @@ async function runExpertAgent({ messages, systemPrompt, onChunk, onEvent, curren
     }
 
     const ctx = { sources: [], sourceIndex: new Map(), usages: [] };
+    const isBedrock = providerId === 'bedrock';
     const recordStep = (step) => {
         if (step.usage) ctx.usages.push({ model, inTok: step.usage.prompt_tokens || 0, outTok: step.usage.completion_tokens || 0 });
     };
 
     for (let iter = 0; iter < MAX_ITERATIONS; iter += 1) {
-        const step = await streamStep({ apiKey, model, messages: convo, tools: TOOL_SCHEMAS, onChunk, cfg });
+        const step = isBedrock
+            ? await bedrockStreamStep({ apiKey, model, convo, tools: TOOL_SCHEMAS, onChunk })
+            : await streamStep({ apiKey, model, messages: convo, tools: TOOL_SCHEMAS, onChunk, cfg });
         recordStep(step);
         if (step.toolCalls.length === 0) {
             logger.success('Phase 8', `Expert agent answered after ${iter} tool round(s); sources=${ctx.sources.length}`);
@@ -328,7 +432,9 @@ async function runExpertAgent({ messages, systemPrompt, onChunk, onEvent, curren
     // Safety net: force a final answer without more tools.
     if (onEvent) try { onEvent({ type: 'status', text: 'wrapping up' }); } catch (_) {}
     const finalConvo = [...convo, { role: 'user', content: 'You have gathered enough. Give your best analysis and next steps now, citing sources with [n].' }];
-    const final = await streamStep({ apiKey, model, messages: finalConvo, tools: null, onChunk, cfg });
+    const final = isBedrock
+        ? await bedrockStreamStep({ apiKey, model, convo: finalConvo, tools: null, onChunk })
+        : await streamStep({ apiKey, model, messages: finalConvo, tools: null, onChunk, cfg });
     recordStep(final);
     return { text: final.content, sources: ctx.sources, usages: ctx.usages, provider: providerId, model };
 }

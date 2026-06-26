@@ -33,6 +33,19 @@ const DEFAULT_PRICING = {
     'deepseek-v4-flash': { in: 0.15, out: 0.5 },
     'deepseek-reasoner': { in: 0.55, out: 2.2 },
     'deepseek-chat': { in: 0.15, out: 0.5 },
+    // AWS Bedrock — USD per 1M tokens (on-demand, us-east-1; verify at aws.amazon.com/bedrock/pricing)
+    'anthropic.claude-opus-4-5': { in: 15, out: 75 },
+    'anthropic.claude-sonnet-4-5': { in: 3, out: 15 },
+    'anthropic.claude-3-5-sonnet-20241022-v2:0': { in: 3, out: 15 },
+    'anthropic.claude-3-5-haiku-20241022-v1:0': { in: 0.8, out: 4 },
+    'anthropic.claude-3-haiku-20240307-v1:0': { in: 0.25, out: 1.25 },
+    'amazon.nova-pro-v1:0': { in: 0.8, out: 3.2 },
+    'amazon.nova-lite-v1:0': { in: 0.06, out: 0.24 },
+    'amazon.nova-micro-v1:0': { in: 0.035, out: 0.14 },
+    'meta.llama3-3-70b-instruct-v1:0': { in: 0.72, out: 0.72 },
+    'meta.llama3-1-8b-instruct-v1:0': { in: 0.22, out: 0.22 },
+    'mistral.mistral-large-2402-v1:0': { in: 4, out: 12 },
+    'mistral.mistral-small-2402-v1:0': { in: 1, out: 3 },
     default: { in: 1, out: 3 },
 };
 

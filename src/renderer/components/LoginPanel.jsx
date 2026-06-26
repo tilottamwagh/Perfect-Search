@@ -31,6 +31,7 @@ const PROVIDER_COLOR = {
     emerald: 'from-emerald-50/60 via-white to-teal-50/40 dark:from-emerald-950/30 dark:via-slate-900/60 dark:to-emerald-950/20 border-emerald-200/70 dark:border-emerald-800/40',
     sky: 'from-sky-50/60 via-white to-cyan-50/40 dark:from-sky-950/30 dark:via-slate-900/60 dark:to-cyan-950/20 border-sky-200/70 dark:border-sky-800/40',
     cyan: 'from-cyan-50/60 via-white to-teal-50/40 dark:from-cyan-950/30 dark:via-slate-900/60 dark:to-teal-950/20 border-cyan-200/70 dark:border-cyan-800/40',
+    orange: 'from-orange-50/60 via-white to-amber-50/40 dark:from-orange-950/30 dark:via-slate-900/60 dark:to-amber-950/20 border-orange-200/70 dark:border-orange-800/40',
 };
 const PROVIDER_BADGE = {
     amber: 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300',
@@ -38,6 +39,7 @@ const PROVIDER_BADGE = {
     emerald: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300',
     sky: 'bg-sky-100 text-sky-800 dark:bg-sky-500/20 dark:text-sky-300',
     cyan: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-500/20 dark:text-cyan-300',
+    orange: 'bg-orange-100 text-orange-800 dark:bg-orange-500/20 dark:text-orange-300',
 };
 
 function AiProviderRow({ provider, active, onChange }) {
@@ -45,6 +47,12 @@ function AiProviderRow({ provider, active, onChange }) {
     const [selectedModel, setSelectedModel] = React.useState(provider.activeModel || provider.defaultModel);
     const [busy, setBusy] = React.useState(false);
     const [msg, setMsg] = React.useState(null);
+
+    // AWS Bedrock needs 4 separate fields instead of a single API key.
+    const isBedrock = provider.credentialFormat === 'aws-bedrock';
+    const [bedrockFields, setBedrockFields] = React.useState({ accessKeyId: '', secretAccessKey: '', sessionToken: '', region: 'us-east-1' });
+    const setBedrockField = (k, v) => setBedrockFields((prev) => ({ ...prev, [k]: v }));
+    const bedrockReady = bedrockFields.accessKeyId.length > 8 && bedrockFields.secretAccessKey.length > 8;
     // Collapsed by default so the settings panel reads as a tidy list. Users
     // expand whichever provider they want to configure or inspect.
     const [expanded, setExpanded] = React.useState(false);
@@ -56,10 +64,13 @@ function AiProviderRow({ provider, active, onChange }) {
 
     const save = async () => {
         setBusy(true); setMsg(null);
-        const resp = await window.perfectsearch.saveAiKey(provider.id, value, selectedModel);
+        const keyToSave = isBedrock ? JSON.stringify(bedrockFields) : value;
+        const resp = await window.perfectsearch.saveAiKey(provider.id, keyToSave, selectedModel);
         setBusy(false);
         if (resp.success) {
-            setValue(''); setMsg({ ok: true, text: `Saved (${resp.model})` });
+            setValue('');
+            if (isBedrock) setBedrockFields({ accessKeyId: '', secretAccessKey: '', sessionToken: '', region: 'us-east-1' });
+            setMsg({ ok: true, text: `Saved (${resp.model})` });
             setTimeout(() => setMsg(null), 2500);
             onChange();
         } else {
@@ -274,7 +285,72 @@ function AiProviderRow({ provider, active, onChange }) {
                         </div>
                     )}
 
-                    {!provider.configured && (
+                    {!provider.configured && isBedrock && (
+                        <div className="flex flex-col gap-2">
+                            <div className="grid grid-cols-2 gap-2">
+                                <div className="flex flex-col gap-1">
+                                    <label className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Access Key ID</label>
+                                    <input
+                                        type="text"
+                                        value={bedrockFields.accessKeyId}
+                                        onChange={(e) => setBedrockField('accessKeyId', e.target.value)}
+                                        placeholder="AKIA… or ASIA…"
+                                        autoComplete="off"
+                                        className="text-xs font-mono px-3 py-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 dark:focus:border-orange-400"
+                                    />
+                                </div>
+                                <div className="flex flex-col gap-1">
+                                    <label className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">AWS Region</label>
+                                    <select
+                                        value={bedrockFields.region}
+                                        onChange={(e) => setBedrockField('region', e.target.value)}
+                                        className="text-xs font-mono px-3 py-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 dark:focus:border-orange-400"
+                                    >
+                                        <option value="us-east-1">us-east-1 (N. Virginia)</option>
+                                        <option value="us-west-2">us-west-2 (Oregon)</option>
+                                        <option value="eu-west-1">eu-west-1 (Ireland)</option>
+                                        <option value="eu-central-1">eu-central-1 (Frankfurt)</option>
+                                        <option value="ap-southeast-1">ap-southeast-1 (Singapore)</option>
+                                        <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div className="flex flex-col gap-1">
+                                <label className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Secret Access Key</label>
+                                <input
+                                    type="password"
+                                    value={bedrockFields.secretAccessKey}
+                                    onChange={(e) => setBedrockField('secretAccessKey', e.target.value)}
+                                    placeholder="Your secret access key"
+                                    autoComplete="new-password"
+                                    className="text-xs font-mono px-3 py-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 dark:focus:border-orange-400"
+                                />
+                            </div>
+                            <div className="flex flex-col gap-1">
+                                <label className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">
+                                    Session Token <span className="text-orange-500 dark:text-orange-400">(required for SSO / temporary credentials)</span>
+                                </label>
+                                <textarea
+                                    value={bedrockFields.sessionToken}
+                                    onChange={(e) => setBedrockField('sessionToken', e.target.value)}
+                                    placeholder="IQoJ… (paste the full token from AWS access portal)"
+                                    rows={3}
+                                    className="text-xs font-mono px-3 py-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 dark:focus:border-orange-400 resize-none"
+                                />
+                                <p className="text-[10px] text-slate-400 dark:text-slate-500">SSO tokens expire in 1–8 hours. Leave blank only for permanent IAM user keys (AKIA…).</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={save}
+                                disabled={busy || !bedrockReady}
+                                className="self-end text-xs text-white px-4 py-2 rounded-md font-semibold bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 disabled:opacity-50 transition-all shadow-sm shadow-orange-500/25"
+                            >
+                                {busy ? 'Testing…' : 'Save & test'}
+                            </button>
+                        </div>
+                    )}
+
+                    {!provider.configured && !isBedrock && (
                         <div className="flex gap-2">
                             <input
                                 type="password"
