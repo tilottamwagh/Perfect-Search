@@ -48,11 +48,8 @@ function AiProviderRow({ provider, active, onChange }) {
     const [busy, setBusy] = React.useState(false);
     const [msg, setMsg] = React.useState(null);
 
-    // AWS Bedrock needs 4 separate fields instead of a single API key.
+    // AWS Bedrock accepts either a Bedrock API key (bedrock-api-key-…) or IAM JSON.
     const isBedrock = provider.credentialFormat === 'aws-bedrock';
-    const [bedrockFields, setBedrockFields] = React.useState({ accessKeyId: '', secretAccessKey: '', sessionToken: '', region: 'us-east-1' });
-    const setBedrockField = (k, v) => setBedrockFields((prev) => ({ ...prev, [k]: v }));
-    const bedrockReady = bedrockFields.accessKeyId.length > 8 && bedrockFields.secretAccessKey.length > 8;
     // Collapsed by default so the settings panel reads as a tidy list. Users
     // expand whichever provider they want to configure or inspect.
     const [expanded, setExpanded] = React.useState(false);
@@ -64,13 +61,10 @@ function AiProviderRow({ provider, active, onChange }) {
 
     const save = async () => {
         setBusy(true); setMsg(null);
-        const keyToSave = isBedrock ? JSON.stringify(bedrockFields) : value;
-        const resp = await window.perfectsearch.saveAiKey(provider.id, keyToSave, selectedModel);
+        const resp = await window.perfectsearch.saveAiKey(provider.id, value, selectedModel);
         setBusy(false);
         if (resp.success) {
-            setValue('');
-            if (isBedrock) setBedrockFields({ accessKeyId: '', secretAccessKey: '', sessionToken: '', region: 'us-east-1' });
-            setMsg({ ok: true, text: `Saved (${resp.model})` });
+            setValue(''); setMsg({ ok: true, text: `Saved (${resp.model})` });
             setTimeout(() => setMsg(null), 2500);
             onChange();
         } else {
@@ -287,66 +281,27 @@ function AiProviderRow({ provider, active, onChange }) {
 
                     {!provider.configured && isBedrock && (
                         <div className="flex flex-col gap-2">
-                            <div className="grid grid-cols-2 gap-2">
-                                <div className="flex flex-col gap-1">
-                                    <label className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Access Key ID</label>
-                                    <input
-                                        type="text"
-                                        value={bedrockFields.accessKeyId}
-                                        onChange={(e) => setBedrockField('accessKeyId', e.target.value)}
-                                        placeholder="AKIA… or ASIA…"
-                                        autoComplete="off"
-                                        className="text-xs font-mono px-3 py-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 dark:focus:border-orange-400"
-                                    />
-                                </div>
-                                <div className="flex flex-col gap-1">
-                                    <label className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">AWS Region</label>
-                                    <select
-                                        value={bedrockFields.region}
-                                        onChange={(e) => setBedrockField('region', e.target.value)}
-                                        className="text-xs font-mono px-3 py-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 dark:focus:border-orange-400"
-                                    >
-                                        <option value="us-east-1">us-east-1 (N. Virginia)</option>
-                                        <option value="us-west-2">us-west-2 (Oregon)</option>
-                                        <option value="eu-west-1">eu-west-1 (Ireland)</option>
-                                        <option value="eu-central-1">eu-central-1 (Frankfurt)</option>
-                                        <option value="ap-southeast-1">ap-southeast-1 (Singapore)</option>
-                                        <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
-                                    </select>
-                                </div>
+                            <textarea
+                                value={value}
+                                onChange={(e) => setValue(e.target.value)}
+                                placeholder={'bedrock-api-key-… (from AWS Console → Bedrock → API keys)\n\nor IAM JSON: {"accessKeyId":"AKIA…","secretAccessKey":"…","region":"us-east-1"}'}
+                                rows={4}
+                                autoComplete="off"
+                                className="text-xs font-mono px-3 py-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 dark:focus:border-orange-400 resize-none"
+                            />
+                            <div className="flex items-start justify-between gap-2">
+                                <p className="text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed">
+                                    <strong>Recommended:</strong> Bedrock API key — AWS Console → Bedrock → API keys → Generate. Short-term keys last 12 h; long-term keys last up to 1 year.
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={save}
+                                    disabled={busy || value.length < 20}
+                                    className="shrink-0 text-xs text-white px-4 py-2 rounded-md font-semibold bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 disabled:opacity-50 transition-all shadow-sm shadow-orange-500/25"
+                                >
+                                    {busy ? 'Testing…' : 'Save & test'}
+                                </button>
                             </div>
-                            <div className="flex flex-col gap-1">
-                                <label className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Secret Access Key</label>
-                                <input
-                                    type="password"
-                                    value={bedrockFields.secretAccessKey}
-                                    onChange={(e) => setBedrockField('secretAccessKey', e.target.value)}
-                                    placeholder="Your secret access key"
-                                    autoComplete="new-password"
-                                    className="text-xs font-mono px-3 py-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 dark:focus:border-orange-400"
-                                />
-                            </div>
-                            <div className="flex flex-col gap-1">
-                                <label className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">
-                                    Session Token <span className="text-orange-500 dark:text-orange-400">(required for SSO / temporary credentials)</span>
-                                </label>
-                                <textarea
-                                    value={bedrockFields.sessionToken}
-                                    onChange={(e) => setBedrockField('sessionToken', e.target.value)}
-                                    placeholder="IQoJ… (paste the full token from AWS access portal)"
-                                    rows={3}
-                                    className="text-xs font-mono px-3 py-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 dark:focus:border-orange-400 resize-none"
-                                />
-                                <p className="text-[10px] text-slate-400 dark:text-slate-500">SSO tokens expire in 1–8 hours. Leave blank only for permanent IAM user keys (AKIA…).</p>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={save}
-                                disabled={busy || !bedrockReady}
-                                className="self-end text-xs text-white px-4 py-2 rounded-md font-semibold bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 disabled:opacity-50 transition-all shadow-sm shadow-orange-500/25"
-                            >
-                                {busy ? 'Testing…' : 'Save & test'}
-                            </button>
                         </div>
                     )}
 
