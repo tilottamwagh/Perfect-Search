@@ -612,10 +612,10 @@ export default function App() {
     const themeLabel = themePref === 'dark' ? 'Switch to light' : themePref === 'light' ? 'Use system theme' : 'Switch to dark';
 
     return (
-        <div className="min-h-screen flex flex-row text-slate-900 dark:text-slate-100">
+        <div className="h-screen overflow-hidden flex flex-row text-slate-900 dark:text-slate-100">
             {/* LEFT COLUMN — search interface */}
             <div
-                className={`flex flex-col min-h-screen ${isDragging ? '' : 'transition-all duration-300 ease-in-out'}`}
+                className={`flex flex-col h-full overflow-hidden ${isDragging ? '' : 'transition-all duration-300 ease-in-out'}`}
                 style={{
                     flex: isRightPanelOpen ? `0 0 ${leftWidthPct}%` : '1 1 auto',
                     maxWidth: isRightPanelOpen ? `${leftWidthPct}%` : '100%',
@@ -934,7 +934,7 @@ export default function App() {
                 Full agent UI with free navigation (home, dashboards, cases, KB). */}
             {isSnowPanelOpen && (
                 <div
-                    className="relative border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col"
+                    className="relative border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col h-full overflow-hidden"
                     style={{ flex: '1 1 auto', minWidth: '300px' }}
                 >
                     <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shrink-0">

@@ -57,11 +57,19 @@ function setPricing(p) {
 }
 function priceFor(model) {
     const p = getPricing();
-    if (model && p[model]) return p[model];
+    if (!model) return p.default;
+    // Strip cross-region inference profile prefix (us./eu./ap.) before lookup
+    // so that "us.amazon.nova-lite-v1:0" matches "amazon.nova-lite-v1:0".
+    const bare = model.replace(/^(?:us|eu|ap)\./, '');
+    if (p[model]) return p[model];
+    if (bare !== model && p[bare]) return p[bare];
     // Longest-prefix match (so "gpt-5-mini-2026" maps to gpt-5-mini before gpt-5).
     let best = null;
     for (const k of Object.keys(p)) {
-        if (k !== 'default' && model && model.startsWith(k) && (!best || k.length > best.length)) best = k;
+        if (k === 'default') continue;
+        for (const m of [model, bare]) {
+            if (m.startsWith(k) && (!best || k.length > best.length)) best = k;
+        }
     }
     return best ? p[best] : p.default;
 }

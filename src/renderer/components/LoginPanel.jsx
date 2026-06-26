@@ -284,7 +284,7 @@ function AiProviderRow({ provider, active, onChange }) {
                             <textarea
                                 value={value}
                                 onChange={(e) => setValue(e.target.value)}
-                                placeholder={'bedrock-api-key-… (from AWS Console → Bedrock → API keys)\n\nor IAM JSON: {"accessKeyId":"AKIA…","secretAccessKey":"…","region":"us-east-1"}'}
+                                placeholder={'Short-term key:  bedrock-api-key-…\nLong-term key:  ABSK… (Mumbai/other region: ABSK…|ap-south-1)\n\nor IAM JSON: {"accessKeyId":"AKIA…","secretAccessKey":"…","region":"us-east-1"}'}
                                 rows={4}
                                 autoComplete="off"
                                 className="text-xs font-mono px-3 py-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 dark:focus:border-orange-400 resize-none"

@@ -18,6 +18,22 @@ const logger = require('../utils/logger');
 
 const DEFAULT_MODEL = process.env.OMNISEARCH_BEDROCK_MODEL || 'amazon.nova-lite-v1:0';
 
+// In non-US regions, Amazon Nova (and Titan) models must be invoked via a
+// cross-region inference profile — e.g. ap.amazon.nova-micro-v1:0 — because
+// on-demand throughput for the bare model ID is only available in us-* regions.
+const INFERENCE_PROFILE_MODELS = /^amazon\.(nova|titan)/i;
+
+function getGeoPrefix(region) {
+    if (region.startsWith('eu-')) return 'eu';
+    if (region.startsWith('ap-')) return 'ap';
+    return 'us'; // us-* and all others
+}
+
+function resolveModelId(modelId, region) {
+    if (!INFERENCE_PROFILE_MODELS.test(modelId)) return modelId;
+    return `${getGeoPrefix(region)}.${modelId}`;
+}
+
 const MODELS = [
     // Anthropic Claude via Bedrock
     { id: 'anthropic.claude-opus-4-5-20251101-v1:0', label: 'Claude Opus 4.5 — most capable', tier: 'premium', supportsWeb: false },
@@ -42,7 +58,7 @@ const META = {
     name: 'AWS Bedrock',
     color: 'orange',
     keyPrefix: 'bedrock-api-key-',
-    keyHelp: 'Paste a Bedrock API key (bedrock-api-key-…) from AWS Console → Bedrock → API keys. Short-term keys last 12 h; long-term keys up to 1 year. Or paste IAM credentials as JSON: {"accessKeyId":"AKIA…","secretAccessKey":"…","region":"us-east-1"}.',
+    keyHelp: 'Paste a Bedrock API key from AWS Console → Bedrock → API keys.\n• Short-term key: bedrock-api-key-… (region auto-detected, lasts 12 h)\n• Long-term key: ABSK… (lasts up to 1 year) — if outside us-east-1, append your region: ABSK…|ap-south-1\n• Or paste IAM JSON: {"accessKeyId":"AKIA…","secretAccessKey":"…","region":"us-east-1"}',
     pricing: 'pay-per-token · varies by model',
     defaultModel: DEFAULT_MODEL,
     models: MODELS,
@@ -52,18 +68,38 @@ const META = {
 
 // ─── credential detection ────────────────────────────────────────────────────
 
+// Accepts short-term keys (bedrock-api-key-…) and long-term keys (ABSK…).
+// Long-term keys don't encode the region, so append |region if not us-east-1:
+//   e.g.  ABSK0abc…xyz|ap-south-1
 function isApiKey(key) {
-    return typeof key === 'string' && key.startsWith('bedrock-api-key-');
+    if (typeof key !== 'string') return false;
+    const raw = key.includes('|') ? key.split('|')[0].trim() : key;
+    return raw.startsWith('bedrock-api-key-') || raw.startsWith('ABSK');
+}
+
+// Strip the optional |region suffix to get the raw Bearer token value.
+function getBearerToken(apiKey) {
+    return apiKey.includes('|') ? apiKey.split('|')[0].trim() : apiKey;
 }
 
 // Extract region from the presigned-URL payload embedded in a Bedrock API key.
 function extractRegionFromApiKey(apiKey) {
-    try {
-        const payload = Buffer.from(apiKey.slice('bedrock-api-key-'.length), 'base64').toString('utf8');
-        // Match %2F or / as a complete unit (not character-by-character) before the region.
-        const m = payload.match(/(?:%2F|\/)([a-z]+-[a-z]+-\d+)(?:%2F|\/)bedrock/i);
-        return m ? m[1].toLowerCase() : 'us-east-1';
-    } catch (_) { return 'us-east-1'; }
+    // Explicit region suffix: ABSK...|ap-south-1
+    if (apiKey.includes('|')) {
+        const region = apiKey.split('|')[1]?.trim();
+        if (region && /^[a-z]+-[a-z]+-\d+$/.test(region)) return region;
+    }
+    // Short-term keys encode region in base64 presigned-URL payload.
+    if (apiKey.startsWith('bedrock-api-key-')) {
+        try {
+            const payload = Buffer.from(apiKey.slice('bedrock-api-key-'.length), 'base64').toString('utf8');
+            // Match %2F or / as a complete unit (not character-by-character) before the region.
+            const m = payload.match(/(?:%2F|\/)([a-z]+-[a-z]+-\d+)(?:%2F|\/)bedrock/i);
+            return m ? m[1].toLowerCase() : 'us-east-1';
+        } catch (_) { return 'us-east-1'; }
+    }
+    // Long-term ABSK keys without explicit |region → default us-east-1.
+    return 'us-east-1';
 }
 
 function parseCreds(apiKey) {
@@ -105,14 +141,15 @@ class BearerTokenHandler {
 function makeClient(apiKey) {
     if (isApiKey(apiKey)) {
         const region = extractRegionFromApiKey(apiKey);
+        const token = getBearerToken(apiKey);
         return new BedrockRuntimeClient({
             region,
             credentials: { accessKeyId: 'dummy', secretAccessKey: 'dummy' },
-            requestHandler: new BearerTokenHandler(apiKey),
+            requestHandler: new BearerTokenHandler(token),
         });
     }
     const creds = parseCreds(apiKey);
-    if (!creds) throw new Error('Invalid credential — paste a Bedrock API key (bedrock-api-key-…) or IAM JSON {"accessKeyId":"…","secretAccessKey":"…","region":"us-east-1"}');
+    if (!creds) throw new Error('Invalid credential — paste a Bedrock API key (bedrock-api-key-… or ABSK…), or IAM JSON {"accessKeyId":"…","secretAccessKey":"…","region":"us-east-1"}');
     const cfg = {
         region: creds.region || 'us-east-1',
         credentials: { accessKeyId: creds.accessKeyId, secretAccessKey: creds.secretAccessKey },
@@ -125,26 +162,56 @@ function makeClient(apiKey) {
 
 async function testKey(apiKey) {
     if (!isApiKey(apiKey) && !parseCreds(apiKey)) {
-        return { ok: false, error: 'Invalid credential — paste a Bedrock API key (bedrock-api-key-…) or IAM JSON {"accessKeyId":"…","secretAccessKey":"…","region":"us-east-1"}' };
+        return { ok: false, error: 'Invalid credential — paste a Bedrock API key (bedrock-api-key-… or ABSK…), or IAM JSON {"accessKeyId":"…","secretAccessKey":"…","region":"us-east-1"}. For long-term ABSK keys outside us-east-1, append your region: ABSK…|ap-south-1' };
     }
-    try {
-        const client = makeClient(apiKey);
-        const cmd = new ConverseCommand({
-            modelId: 'amazon.nova-micro-v1:0',
-            messages: [{ role: 'user', content: [{ text: 'Hi' }] }],
-            inferenceConfig: { maxTokens: 1 },
-        });
-        const resp = await client.send(cmd);
-        const ok = resp.$metadata?.httpStatusCode === 200;
-        const region = isApiKey(apiKey) ? extractRegionFromApiKey(apiKey) : (parseCreds(apiKey)?.region || 'us-east-1');
-        return { ok, model: region, error: ok ? undefined : 'Unexpected response from Bedrock' };
-    } catch (err) {
-        const msg = (err.cause?.message || err.message || String(err)).slice(0, 300);
-        if (/ExpiredToken|expired|TokenExpired/i.test(msg)) return { ok: false, error: 'Bedrock key or credentials have expired. Generate a new API key from AWS Console → Bedrock → API keys.' };
-        if (/AccessDenied|not authorized|UnauthorizedClient|InvalidSignature/i.test(msg)) return { ok: false, error: 'Access denied — your key/role needs bedrock:InvokeModel permission.' };
-        if (/ResourceNotFoundException|not found/i.test(msg)) return { ok: false, error: 'Model not available — enable Amazon Nova Micro in AWS Console → Bedrock → Model access (or check your region).' };
-        return { ok: false, error: msg };
+    const region = isApiKey(apiKey) ? extractRegionFromApiKey(apiKey) : (parseCreds(apiKey)?.region || 'us-east-1');
+    // Try models in order — not all models are available in every region.
+    // ap-south-1 (Mumbai) and similar fringe regions may not have Nova inference profiles.
+    const candidates = [
+        resolveModelId('amazon.nova-micro-v1:0', region),
+        'anthropic.claude-3-haiku-20240307-v1:0',
+        'amazon.titan-text-lite-v1',
+    ];
+    let lastErr = '';
+    for (const modelId of candidates) {
+        try {
+            const client = makeClient(apiKey);
+            const cmd = new ConverseCommand({
+                modelId,
+                messages: [{ role: 'user', content: [{ text: 'Hi' }] }],
+                inferenceConfig: { maxTokens: 1 },
+            });
+            const resp = await client.send(cmd);
+            if (resp.$metadata?.httpStatusCode === 200) return { ok: true, model: region };
+        } catch (err) {
+            const msg = (err.cause?.message || err.message || String(err));
+            if (/ExpiredToken|expired|TokenExpired/i.test(msg)) return { ok: false, error: 'Bedrock key or credentials have expired. Generate a new API key from AWS Console → Bedrock → API keys.' };
+            if (/AccessDenied|not authorized|UnauthorizedClient|InvalidSignature/i.test(msg)) return { ok: false, error: 'Access denied — your key/role needs bedrock:InvokeModel permission.' };
+            // Rate-limited = key is valid, quota temporarily exhausted.
+            if (/too many tokens|ThrottlingException|throttl|rate.?limit|quota/i.test(msg)) return { ok: true, model: region, warning: 'Key is valid but your account has hit its daily token quota. Usage will resume when the quota resets (usually midnight UTC).' };
+            // Model unavailable, EOL, or needs form — try the next candidate.
+            if (/invalid.*model|model.*invalid|ValidationException|not supported|use case|model access|ModelNotReady|EnabledModels|not enabled|access.*model|model.*access|end of (its )?life|deprecated/i.test(msg)) { lastErr = msg; continue; }
+            return { ok: false, error: msg.slice(0, 300) };
+        }
     }
+    // All candidates failed — region likely has no supported models.
+    const hint = region !== 'us-east-1'
+        ? ` Try removing |${region} from your key to use the us-east-1 endpoint instead.`
+        : '';
+    return { ok: false, error: `No compatible models found in region ${region}.${hint}` };
+}
+
+// ─── shared error translator ─────────────────────────────────────────────────
+
+function translateBedrockError(err) {
+    const msg = (err.cause?.message || err.message || String(err));
+    if (/too many tokens|ThrottlingException|throttl|rate.?limit|quota/i.test(msg))
+        throw new Error('AWS Bedrock daily token quota exhausted. Quota resets at midnight UTC — or switch to another AI provider in Settings.');
+    if (/ExpiredToken|expired|TokenExpired/i.test(msg))
+        throw new Error('Bedrock key has expired. Generate a new API key from AWS Console → Bedrock → API keys.');
+    if (/AccessDenied|not authorized/i.test(msg))
+        throw new Error('Access denied — your key/role needs bedrock:InvokeModel permission.');
+    throw err;
 }
 
 // ─── synthesize ──────────────────────────────────────────────────────────────
@@ -152,7 +219,8 @@ async function testKey(apiKey) {
 async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt, picked: prePicked }) {
     const picked = Array.isArray(prePicked) ? prePicked : selectSources(results);
     if (picked.length === 0) throw new Error('NO_SOURCES');
-    const modelId = model || DEFAULT_MODEL;
+    const region = isApiKey(apiKey) ? extractRegionFromApiKey(apiKey) : (parseCreds(apiKey)?.region || 'us-east-1');
+    const modelId = resolveModelId(model || DEFAULT_MODEL, region);
     const userText = buildUserMessage(query, picked);
     const sysText = (systemPrompt && systemPrompt.length > 0) ? systemPrompt : SYSTEM_PROMPT;
     logger.info('Phase 6', `[bedrock:${modelId}] sources=${picked.length} prompt=${userText.length} chars`);
@@ -166,7 +234,8 @@ async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt
         inferenceConfig: { maxTokens: 4096, temperature: 0.4 },
     });
 
-    const resp = await client.send(cmd);
+    let resp;
+    try { resp = await client.send(cmd); } catch (err) { translateBedrockError(err); }
     let fullText = '';
     let usage = null;
     for await (const event of resp.stream) {
@@ -198,7 +267,8 @@ async function synthesizeWithWeb() {
 // ─── chat (non-streaming, for intent/query extraction) ───────────────────────
 
 async function chat(systemPrompt, userPrompt, { apiKey, model, maxTokens = 256 } = {}) {
-    const modelId = model || DEFAULT_MODEL;
+    const region = isApiKey(apiKey) ? extractRegionFromApiKey(apiKey) : (parseCreds(apiKey)?.region || 'us-east-1');
+    const modelId = resolveModelId(model || DEFAULT_MODEL, region);
     const client = makeClient(apiKey);
     const cmd = new ConverseCommand({
         modelId,
@@ -206,14 +276,16 @@ async function chat(systemPrompt, userPrompt, { apiKey, model, maxTokens = 256 }
         messages: [{ role: 'user', content: [{ text: userPrompt }] }],
         inferenceConfig: { maxTokens, temperature: 0.1 },
     });
-    const resp = await client.send(cmd);
+    let resp;
+    try { resp = await client.send(cmd); } catch (err) { translateBedrockError(err); }
     return resp.output?.message?.content?.[0]?.text || '';
 }
 
 // ─── analyzeCase ─────────────────────────────────────────────────────────────
 
 async function analyzeCase({ caseBundle, kbResults, apiKey, onChunk, model }) {
-    const modelId = model || DEFAULT_MODEL;
+    const region = isApiKey(apiKey) ? extractRegionFromApiKey(apiKey) : (parseCreds(apiKey)?.region || 'us-east-1');
+    const modelId = resolveModelId(model || DEFAULT_MODEL, region);
     let text = buildCaseAnalysisText(caseBundle, kbResults);
     const imageCount = Array.isArray(caseBundle?.images) ? caseBundle.images.length : 0;
     if (imageCount > 0) {
@@ -230,7 +302,8 @@ async function analyzeCase({ caseBundle, kbResults, apiKey, onChunk, model }) {
         inferenceConfig: { maxTokens: 4096, temperature: 0.3 },
     });
 
-    const resp = await client.send(cmd);
+    let resp;
+    try { resp = await client.send(cmd); } catch (err) { translateBedrockError(err); }
     let fullText = '';
     let usage = null;
     for await (const event of resp.stream) {
