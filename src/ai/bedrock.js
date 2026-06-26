@@ -60,8 +60,9 @@ function isApiKey(key) {
 function extractRegionFromApiKey(apiKey) {
     try {
         const payload = Buffer.from(apiKey.slice('bedrock-api-key-'.length), 'base64').toString('utf8');
-        const m = payload.match(/[%2F/]([a-z]+-[a-z]+-\d)(?:%2F|\/)bedrock/i);
-        return m ? m[1] : 'us-east-1';
+        // Match %2F or / as a complete unit (not character-by-character) before the region.
+        const m = payload.match(/(?:%2F|\/)([a-z]+-[a-z]+-\d+)(?:%2F|\/)bedrock/i);
+        return m ? m[1].toLowerCase() : 'us-east-1';
     } catch (_) { return 'us-east-1'; }
 }
 
