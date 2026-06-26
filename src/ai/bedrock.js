@@ -1,5 +1,6 @@
 require('dotenv').config();
 const { BedrockRuntimeClient, ConverseStreamCommand, ConverseCommand } = require('@aws-sdk/client-bedrock-runtime');
+const { NodeHttpHandler } = require('@smithy/node-http-handler');
 const { SYSTEM_PROMPT, CASE_ANALYSIS_SYSTEM_PROMPT, selectSources, buildUserMessage, buildCaseAnalysisText } = require('./prompt');
 const logger = require('../utils/logger');
 
@@ -74,13 +75,40 @@ function parseCreds(apiKey) {
 
 // ─── client factory ──────────────────────────────────────────────────────────
 // Both auth modes use the same AWS SDK ConverseCommand/ConverseStreamCommand.
-// API keys use { token } config → SDK emits Authorization: Bearer instead of SigV4.
-// IAM JSON uses { credentials } config → SDK uses SigV4.
+//
+// API keys: the SDK { token } option does NOT bypass SigV4 for BedrockRuntime.
+// Instead we use a custom NodeHttpHandler that intercepts the outgoing request
+// and replaces the SigV4 Authorization header with "Bearer <key>" — along with
+// stripping the SigV4-specific amz headers that would confuse the server.
+// Dummy credentials satisfy the SDK's internal validation; the server never
+// sees them because our handler overwrites the header before the TCP write.
+//
+// IAM JSON: standard SigV4 path via { credentials } config.
+
+class BearerTokenHandler {
+    constructor(token) {
+        this._token = token;
+        this._inner = new NodeHttpHandler({ connectionTimeout: 10000, requestTimeout: 60000 });
+    }
+    async handle(request, options) {
+        request.headers['authorization'] = `Bearer ${this._token}`;
+        delete request.headers['x-amz-date'];
+        delete request.headers['x-amz-security-token'];
+        delete request.headers['x-amz-content-sha256'];
+        return this._inner.handle(request, options);
+    }
+    updateHttpClientConfig(k, v) { return this._inner.updateHttpClientConfig(k, v); }
+    httpHandlerConfigs() { return this._inner.httpHandlerConfigs(); }
+}
 
 function makeClient(apiKey) {
     if (isApiKey(apiKey)) {
         const region = extractRegionFromApiKey(apiKey);
-        return new BedrockRuntimeClient({ region, token: { token: apiKey } });
+        return new BedrockRuntimeClient({
+            region,
+            credentials: { accessKeyId: 'dummy', secretAccessKey: 'dummy' },
+            requestHandler: new BearerTokenHandler(apiKey),
+        });
     }
     const creds = parseCreds(apiKey);
     if (!creds) throw new Error('Invalid credential — paste a Bedrock API key (bedrock-api-key-…) or IAM JSON {"accessKeyId":"…","secretAccessKey":"…","region":"us-east-1"}');
