@@ -21,7 +21,11 @@ const DEFAULT_MODEL = process.env.OMNISEARCH_BEDROCK_MODEL || 'amazon.nova-lite-
 // In non-US regions, Amazon Nova (and Titan) models must be invoked via a
 // cross-region inference profile — e.g. ap.amazon.nova-micro-v1:0 — because
 // on-demand throughput for the bare model ID is only available in us-* regions.
-const INFERENCE_PROFILE_MODELS = /^amazon\.(nova|titan)/i;
+const INFERENCE_PROFILE_MODELS = /^(amazon\.(nova|titan)|meta\.llama)/i;
+const GLOBAL_PROFILE_MODELS = /^anthropic\.claude-(sonnet|opus)-4-5-/i;
+const LEGACY_MODEL_ALIASES = {
+    'anthropic.claude-sonnet-4-5-20251101-v1:0': 'anthropic.claude-sonnet-4-5-20250929-v1:0',
+};
 
 function getGeoPrefix(region) {
     if (region.startsWith('eu-')) return 'eu';
@@ -30,14 +34,17 @@ function getGeoPrefix(region) {
 }
 
 function resolveModelId(modelId, region) {
-    if (!INFERENCE_PROFILE_MODELS.test(modelId)) return modelId;
-    return `${getGeoPrefix(region)}.${modelId}`;
+    const resolved = LEGACY_MODEL_ALIASES[modelId] || modelId;
+    if (/^(us|eu|ap|au|jp|global)\./i.test(resolved)) return resolved;
+    if (GLOBAL_PROFILE_MODELS.test(resolved)) return `global.${resolved}`;
+    if (INFERENCE_PROFILE_MODELS.test(resolved)) return `${getGeoPrefix(region)}.${resolved}`;
+    return resolved;
 }
 
 const MODELS = [
     // Anthropic Claude via Bedrock
     { id: 'anthropic.claude-opus-4-5-20251101-v1:0', label: 'Claude Opus 4.5 — most capable', tier: 'premium', supportsWeb: false },
-    { id: 'anthropic.claude-sonnet-4-5-20251101-v1:0', label: 'Claude Sonnet 4.5 — fast & smart', tier: 'standard', supportsWeb: false },
+    { id: 'anthropic.claude-sonnet-4-5-20250929-v1:0', label: 'Claude Sonnet 4.5 — fast & smart', tier: 'standard', supportsWeb: false },
     { id: 'anthropic.claude-3-5-sonnet-20241022-v2:0', label: 'Claude 3.5 Sonnet v2 — recommended', tier: 'standard', supportsWeb: false },
     { id: 'anthropic.claude-3-5-haiku-20241022-v1:0', label: 'Claude 3.5 Haiku — fast & cheap', tier: 'fast', supportsWeb: false },
     { id: 'anthropic.claude-3-haiku-20240307-v1:0', label: 'Claude 3 Haiku — cheapest Claude', tier: 'fast', supportsWeb: false },

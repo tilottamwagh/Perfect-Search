@@ -15,6 +15,7 @@ const tokenStore = require('./auth/tokenStore');
 const { search, clearCache } = require('./search/engine');
 const { buildIndex } = require('./connectors/website');
 const logger = require('./utils/logger');
+const sourceDefaults = require('./shared/sourceDefaults.json');
 
 if (require('electron-squirrel-startup')) {
   app.quit();
@@ -245,7 +246,6 @@ function createMainWindow() {
   mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
     const levels = ['VERBOSE', 'INFO', 'WARN', 'ERROR'];
     const tag = levels[level] || 'LOG';
-    // eslint-disable-next-line no-console
     console.log(`[renderer:${tag}] ${message}  (${sourceId || ''}:${line || ''})`);
   });
 
@@ -440,7 +440,7 @@ ipcMain.handle('source:getUrl', async (_event, source) => {
   if (!source) return { success: false, error: 'Source required' };
   const tok = tokenStore.get(source);
   const envKey = `${source.toUpperCase()}_BASE_URL`;
-  const url = (tok && tok.baseUrl) || tokenStore.getSourceUrl(source) || process.env[envKey] || null;
+  const url = (tok && tok.baseUrl) || tokenStore.getSourceUrl(source) || process.env[envKey] || sourceDefaults[source]?.baseUrl || null;
   return { success: true, url };
 });
 
@@ -455,20 +455,14 @@ ipcMain.handle('source:saveConfig', async (_event, source, config) => {
 });
 
 ipcMain.handle('source:listConfigs', async () => {
-  return {
-    success: true,
-    configs: {
-      servicenow: tokenStore.getSourceConfig('servicenow') || {},
-      confluence: tokenStore.getSourceConfig('confluence') || {},
-      atlassian: tokenStore.getSourceConfig('atlassian') || {},
-      jira: tokenStore.getSourceConfig('jira') || {},
-      box: tokenStore.getSourceConfig('box') || {},
-      resources: tokenStore.getSourceConfig('resources') || {},
-      datadog: tokenStore.getSourceConfig('datadog') || {},
-      aws: tokenStore.getSourceConfig('aws') || {},
-      website: tokenStore.getSourceConfig('website') || {},
-    },
-  };
+  const sources = ['slack', 'servicenow', 'confluence', 'atlassian', 'jira', 'box', 'resources', 'datadog', 'aws', 'website'];
+  const configs = {};
+  for (const source of sources) {
+    const saved = tokenStore.getSourceConfig(source) || {};
+    const fallback = sourceDefaults[source] || {};
+    configs[source] = { ...fallback, ...saved, isDefault: !saved.baseUrl && Boolean(fallback.baseUrl) };
+  }
+  return { success: true, configs };
 });
 
 ipcMain.handle('search:query', async (_event, { query, options }) => {

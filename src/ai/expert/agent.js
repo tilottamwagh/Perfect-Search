@@ -4,7 +4,7 @@ const { parse } = require('node-html-parser');
 const { API_URL, sseLines } = require('../openai');
 const tokenStore = require('../../auth/tokenStore');
 const logger = require('../../utils/logger');
-const { BedrockRuntimeClient, ConverseStreamCommand } = require('@aws-sdk/client-bedrock-runtime');
+const { BedrockRuntimeClient, ConverseStreamCommand, ConverseCommand } = require('@aws-sdk/client-bedrock-runtime');
 
 // ───────────────────────────────────────────────────────────────────────────
 // Ask AI Expert — agentic tool-use loop (Phase B)
@@ -318,6 +318,43 @@ function toBedrockMessages(convo) {
 // Uses the shared bedrock adapter's makeClient/resolveModelId so it accepts
 // short-term keys (bedrock-api-key-…), long-term keys (ABSK… optionally
 // with |region suffix), AND IAM JSON — same auth the rest of the app uses.
+// Bedrock Converse non-streaming step. Some Bedrock models support tools only
+// through Converse, not ConverseStream. Use this as a compatibility fallback.
+async function bedrockConverseStep({ apiKey, model, convo, tools }) {
+    const bedrockAdapter = require('../bedrock');
+    const client = bedrockAdapter._makeClient
+        ? bedrockAdapter._makeClient(apiKey)
+        : (() => { throw new Error('Bedrock adapter missing makeClient export'); })();
+    const region = bedrockAdapter.isApiKey(apiKey)
+        ? bedrockAdapter._extractRegion(apiKey)
+        : (bedrockAdapter.parseCreds(apiKey)?.region || 'us-east-1');
+    const modelId = bedrockAdapter._resolveModelId(model, region);
+    const { system, messages } = toBedrockMessages(convo);
+    const cmd = new ConverseCommand({
+        modelId,
+        system,
+        messages,
+        inferenceConfig: { maxTokens: 4096, temperature: 0.3 },
+        ...(tools ? { toolConfig: toBedrockTools(tools) } : {}),
+    });
+    const resp = await client.send(cmd);
+    const blocks = resp.output?.message?.content || [];
+    let content = '';
+    const toolCalls = [];
+    for (const block of blocks) {
+        if (block.text) content += block.text;
+        if (block.toolUse) {
+            toolCalls.push({
+                id: block.toolUse.toolUseId,
+                type: 'function',
+                function: { name: block.toolUse.name, arguments: JSON.stringify(block.toolUse.input || {}) },
+            });
+        }
+    }
+    const usage = resp.usage ? { prompt_tokens: resp.usage.inputTokens || 0, completion_tokens: resp.usage.outputTokens || 0 } : null;
+    return { content, toolCalls, usage };
+}
+
 async function bedrockStreamStep({ apiKey, model, convo, tools, onChunk }) {
     const bedrockAdapter = require('../bedrock');
     const client = bedrockAdapter._makeClient
@@ -335,7 +372,17 @@ async function bedrockStreamStep({ apiKey, model, convo, tools, onChunk }) {
         inferenceConfig: { maxTokens: 4096, temperature: 0.3 },
         ...(tools ? { toolConfig: toBedrockTools(tools) } : {}),
     });
-    const resp = await client.send(cmd);
+    let resp;
+    try {
+        resp = await client.send(cmd);
+    } catch (err) {
+        const msg = err?.cause?.message || err?.message || String(err);
+        if (tools && /tool use.*streaming mode|doesn'?t support tool use in streaming/i.test(msg)) {
+            logger.warn('Phase 8', `Bedrock streaming tool use unsupported for ${modelId}; retrying with non-streaming Converse`);
+            return bedrockConverseStep({ apiKey, model, convo, tools });
+        }
+        throw err;
+    }
 
     let content = '';
     const toolCalls = [];

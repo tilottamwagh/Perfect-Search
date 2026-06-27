@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import sourceDefaults from '../../shared/sourceDefaults.json';
 
 // Connectors that need a user-supplied instance URL. The packaged installer
 // has no .env, so users must enter these in Settings on first run.
@@ -70,7 +71,7 @@ export default function SettingsPanel({ reindexing, onReindex }) {
                 setConfigs(resp.configs || {});
                 const initial = {};
                 for (const src of URL_SOURCES) {
-                    initial[src.id] = resp.configs?.[src.id]?.baseUrl || '';
+                    initial[src.id] = resp.configs?.[src.id]?.baseUrl || sourceDefaults[src.id]?.baseUrl || '';
                 }
                 setDrafts(initial);
             } catch (_) {
@@ -117,7 +118,8 @@ export default function SettingsPanel({ reindexing, onReindex }) {
                 <div className="flex flex-col gap-3">
                     {URL_SOURCES.map((src) => {
                         const value = drafts[src.id] ?? '';
-                        const saved = configs[src.id]?.baseUrl || '';
+                        const saved = configs[src.id]?.baseUrl || sourceDefaults[src.id]?.baseUrl || '';
+                        const isDefault = configs[src.id]?.isDefault || (!configs[src.id]?.baseUrl && Boolean(sourceDefaults[src.id]?.baseUrl));
                         const isDirty = (value || '').trim() !== (saved || '').trim();
                         const err = errors[src.id];
                         const isSaving = savingId === src.id;
@@ -127,8 +129,12 @@ export default function SettingsPanel({ reindexing, onReindex }) {
                                 <label className="text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-2">
                                     {src.label}
                                     {saved && (
-                                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-                                            saved
+                                        <span
+                                            className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full ${isDefault
+                                                ? 'bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300'
+                                                : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'}`}
+                                        >
+                                            {isDefault ? 'default' : 'saved'}
                                         </span>
                                     )}
                                 </label>

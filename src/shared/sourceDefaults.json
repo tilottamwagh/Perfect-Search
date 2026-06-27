@@ -1,0 +1,29 @@
+{
+  "slack": {
+    "baseUrl": "https://ellucian.enterprise.slack.com"
+  },
+  "servicenow": {
+    "baseUrl": "https://elluciansupport.service-now.com"
+  },
+  "confluence": {
+    "baseUrl": "https://ellucian.atlassian.net"
+  },
+  "jira": {
+    "baseUrl": "https://ellucian.atlassian.net"
+  },
+  "atlassian": {
+    "baseUrl": "https://ellucian.atlassian.net"
+  },
+  "box": {
+    "baseUrl": "https://ellucian.app.box.com"
+  },
+  "resources": {
+    "baseUrl": "https://resources.elluciancloud.com"
+  },
+  "datadog": {
+    "baseUrl": ""
+  },
+  "aws": {
+    "baseUrl": ""
+  }
+}

@@ -702,16 +702,18 @@ export default function App() {
                 </header>
 
                 {view === 'settings' && (
-                    <div className="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-                        <LoginPanel authStatus={authStatus} onAuthChange={loadAuthStatus} />
-                        <SettingsPanel reindexing={reindexing} onReindex={handleReindex} />
+                    <div className="flex-1 overflow-y-auto px-4 py-6 bg-white/80 dark:bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+                        <div className="w-full max-w-7xl mx-auto border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+                            <LoginPanel authStatus={authStatus} onAuthChange={loadAuthStatus} />
+                            <SettingsPanel reindexing={reindexing} onReindex={handleReindex} />
+                        </div>
                     </div>
                 )}
 
                 {view === 'expert' && <ExpertPanel />}
                 {view === 'dashboard' && <Dashboard />}
 
-                <main className={`flex-1 w-full mx-auto px-4 py-6 flex flex-col gap-5 overflow-y-auto ${view === 'expert' || view === 'dashboard' ? 'hidden' : ''}`} style={{ maxWidth: '56rem' }}>
+                <main className={`flex-1 w-full mx-auto px-4 py-6 flex flex-col gap-5 overflow-y-auto ${view === 'expert' || view === 'dashboard' || view === 'settings' ? 'hidden' : ''}`} style={{ maxWidth: '56rem' }}>
                     {!query && (
                         <div className="text-center pt-4 pb-2 animate-fade-in">
                             <h1 className="text-3xl sm:text-4xl font-bold tracking-tight bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 dark:from-indigo-400 dark:via-purple-400 dark:to-pink-400 bg-clip-text text-transparent">

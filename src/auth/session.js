@@ -1,6 +1,7 @@
 require('dotenv').config();
 const { BrowserWindow, session } = require('electron');
 const tokenStore = require('./tokenStore');
+const sourceDefaults = require('../shared/sourceDefaults.json');
 const logger = require('../utils/logger');
 
 function getPartition(source) {
@@ -150,7 +151,7 @@ async function loginSlack() {
     // Priority: user-saved Settings URL > env var > slack.com default. For
     // Enterprise Grid customers the workspace URL is e.g.
     // https://yourorg.enterprise.slack.com.
-    const url = tokenStore.getSourceUrl('slack') || process.env.SLACK_WORKSPACE_URL || 'https://app.slack.com';
+    const url = tokenStore.getSourceUrl('slack') || process.env.SLACK_WORKSPACE_URL || sourceDefaults.slack?.baseUrl || 'https://app.slack.com';
     const win = openSSOWindow('slack', 'Slack Login', url);
 
     try {
@@ -321,7 +322,7 @@ async function loginSlack() {
 
 async function loginConfluence() {
     logger.info('Phase 2', 'Opening Confluence SSO window');
-    const baseUrl = tokenStore.getSourceUrl('confluence') || process.env.CONFLUENCE_BASE_URL || 'https://your-org.atlassian.net';
+    const baseUrl = tokenStore.getSourceUrl('confluence') || process.env.CONFLUENCE_BASE_URL || sourceDefaults.confluence?.baseUrl || 'https://your-org.atlassian.net';
 
     // CRITICAL (stale-session fix): a previous login leaves expired
     // cloud.session.token / tenant.session.token cookies in the partition. If
@@ -553,7 +554,7 @@ async function loginServiceNow() {
 // final landing URL after SSO completes.
 async function loginAtlassian() {
     logger.info('Phase 2', 'Opening Atlassian SSO window');
-    const baseUrl = tokenStore.getSourceUrl('atlassian') || process.env.ATLASSIAN_BASE_URL || 'https://home.atlassian.com';
+    const baseUrl = tokenStore.getSourceUrl('atlassian') || process.env.ATLASSIAN_BASE_URL || sourceDefaults.atlassian?.baseUrl || 'https://home.atlassian.com';
     const win = openSSOWindow('atlassian', 'Atlassian Login', baseUrl);
 
     try {
@@ -655,7 +656,7 @@ async function waitForUrlOnDomain(win, targetDomain, requiredStableSeconds = 5, 
 
 async function loginBox() {
     logger.info('Phase 2', 'Opening Box SSO window');
-    const baseUrl = tokenStore.getSourceUrl('box') || process.env.BOX_BASE_URL || 'https://ellucian.app.box.com';
+    const baseUrl = tokenStore.getSourceUrl('box') || process.env.BOX_BASE_URL || sourceDefaults.box?.baseUrl || 'https://ellucian.app.box.com';
     const win = openSSOWindow('box', 'Box Login', `${baseUrl}/folder/0`);
 
     try {
@@ -692,7 +693,7 @@ async function loginBox() {
 // cookie on the unified atlassian.com domain.
 async function loginJira() {
     logger.info('Phase 2', 'Opening Jira SSO window');
-    const baseUrl = tokenStore.getSourceUrl('jira') || process.env.JIRA_BASE_URL || 'https://ellucian.atlassian.net';
+    const baseUrl = tokenStore.getSourceUrl('jira') || process.env.JIRA_BASE_URL || sourceDefaults.jira?.baseUrl || 'https://ellucian.atlassian.net';
     const url = `${baseUrl}/jira/projects?page=1&sortKey=name&sortOrder=ASC`;
     const win = openSSOWindow('jira', 'Jira Login', url);
 
@@ -735,7 +736,7 @@ async function loginJira() {
 // stops moving and is on resources.elluciancloud.com".
 async function loginResources() {
     logger.info('Phase 2', 'Opening Ellucian Resources SSO window');
-    const baseUrl = process.env.RESOURCES_BASE_URL || 'https://resources.elluciancloud.com';
+    const baseUrl = tokenStore.getSourceUrl('resources') || process.env.RESOURCES_BASE_URL || sourceDefaults.resources?.baseUrl || 'https://resources.elluciancloud.com';
     const win = openSSOWindow('resources', 'Ellucian Resources Login', `${baseUrl}/home`);
 
     try {
@@ -769,7 +770,7 @@ async function loginResources() {
 // target domain" detection used by Box/Resources/Jira.
 async function loginDatadog() {
     logger.info('Phase 2', 'Opening Datadog SSO window');
-    const baseUrl = tokenStore.getSourceUrl('datadog') || process.env.DATADOG_BASE_URL || 'https://app.datadoghq.com';
+    const baseUrl = tokenStore.getSourceUrl('datadog') || process.env.DATADOG_BASE_URL || sourceDefaults.datadog?.baseUrl || 'https://app.datadoghq.com';
     const win = openSSOWindow('datadog', 'Datadog Login', baseUrl);
 
     try {
@@ -806,7 +807,7 @@ async function loginDatadog() {
 // We accept either the SSO host or the console host as the "you're in" signal.
 async function loginAws() {
     logger.info('Phase 2', 'Opening AWS SSO window');
-    const baseUrl = tokenStore.getSourceUrl('aws') || process.env.AWS_SSO_START_URL;
+    const baseUrl = tokenStore.getSourceUrl('aws') || process.env.AWS_SSO_START_URL || sourceDefaults.aws?.baseUrl;
     if (!baseUrl) {
         throw new Error('AWS SSO start URL not configured. Open Settings → AWS SSO start URL and enter your IAM Identity Center URL (e.g. https://d-9067bdf2d6.awsapps.com/start/).');
     }

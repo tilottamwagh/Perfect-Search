@@ -1,5 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 
+function stripThinkingBlocks(value) {
+    return String(value || '')
+        .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .replace(/<thinking>[\s\S]*$/i, '')
+        .replace(/<think>[\s\S]*$/i, '')
+        .trimStart();
+}
+
 // Minimal Markdown → HTML for the AI answer. Hand-rolled to keep the
 // dependency surface small and predictable. Handles:
 //   - Headings: ## Title
@@ -23,13 +32,13 @@ function renderMarkdown(text, onCitationClick) {
                 buf = '';
             }
         };
-        const re = /\[(\d+(?:\s*,\s*\d+)*)\]/g;
+        const re = /\[(?:N)?(\d+(?:\s*,\s*(?:N)?\d+)*)\]/gi;
         let last = 0;
         let m;
         while ((m = re.exec(line)) !== null) {
             buf += line.slice(last, m.index);
             flush();
-            const nums = m[1].split(/\s*,\s*/).map((n) => parseInt(n, 10));
+            const nums = m[1].split(/\s*,\s*/).map((n) => parseInt(String(n).replace(/^N/i, ''), 10));
             for (const n of nums) {
                 parts.push(
                     <button
@@ -211,11 +220,12 @@ export default function AIAnswer({ query, results, mode = 'internal', onCitation
 
     useEffect(() => {
         if (status === 'idle') run();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    const visibleText = stripThinkingBlocks(text);
+
     const copyAnswer = async () => {
-        try { await navigator.clipboard.writeText(text); } catch (_) {}
+        try { await navigator.clipboard.writeText(visibleText); } catch (_) {}
     };
 
     const containerGradient = isWeb
@@ -252,7 +262,7 @@ export default function AIAnswer({ query, results, mode = 'internal', onCitation
                     )}
                 </div>
                 <div className="flex items-center gap-1.5">
-                    {text && (
+                    {visibleText && (
                         <button
                             type="button"
                             onClick={copyAnswer}
@@ -383,7 +393,7 @@ export default function AIAnswer({ query, results, mode = 'internal', onCitation
 
             {(status === 'streaming' || status === 'done') && (
                 <div className="prose-sm max-w-none">
-                    {text ? renderMarkdown(text, onCitationClick) : (
+                    {visibleText ? renderMarkdown(visibleText, onCitationClick) : (
                         <p className="text-sm text-slate-400 dark:text-slate-500 italic">Reading sources…</p>
                     )}
                     {status === 'streaming' && (
