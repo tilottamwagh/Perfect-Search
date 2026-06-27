@@ -1,5 +1,5 @@
 require('dotenv').config();
-const openai = require('../openai');
+const embeddings = require('../embeddings');
 const tokenStore = require('../../auth/tokenStore');
 const knowledge = require('./knowledge');
 const logger = require('../../utils/logger');
@@ -24,17 +24,17 @@ function toDoc(r) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Embed one batch with retry/backoff on rate limits (429) and transient errors.
-async function embedBatch(batch, apiKey, retries = 4) {
+async function embedBatch(batch, _apiKey, retries = 4) {
     for (let attempt = 0; attempt <= retries; attempt += 1) {
         try {
-            const { vectors, usage } = await openai.embed(batch, { apiKey });
-            return { vectors, tokens: (usage && usage.total_tokens) || 0 };
+            const result = await embeddings.embed(batch);
+            return { vectors: result.vectors, tokens: (result.usage && result.usage.total_tokens) || 0, meta: result.meta, model: result.model, provider: result.provider };
         } catch (e) {
             const msg = String(e.message || '');
             // Quota/billing exhaustion is NOT retryable — fail fast so the build
             // doesn't hang in backoff. Flag it so the caller can stop entirely.
-            if (/insufficient_quota|exceeded your current quota|check your plan and billing/i.test(msg)) {
-                const qe = new Error('INSUFFICIENT_QUOTA: OpenAI account is out of credits/quota.');
+            if (/insufficient_quota|exceeded your current quota|check your plan and billing|quota|billing|payment instrument|credits/i.test(msg)) {
+                const qe = new Error('INSUFFICIENT_QUOTA: Embedding provider is out of credits/quota.');
                 qe.quota = true;
                 throw qe;
             }
@@ -54,21 +54,27 @@ async function embedBatch(batch, apiKey, retries = 4) {
 // Embed texts resiliently. Returns vectors aligned to input (null where a batch
 // ultimately failed, so the rest still get embedded — never all-or-nothing).
 async function embedDocs(texts, { onProgress } = {}) {
-    const apiKey = tokenStore.getAiKey('openai');
-    if (!apiKey || !texts.length) return { vectors: null, tokens: 0 };
+    const provider = embeddings.preferredProvider();
+    if (!provider || !texts.length) return { vectors: null, tokens: 0, provider: null };
     const out = new Array(texts.length).fill(null);
     let tokens = 0;
+    let embedMeta = null;
+    let embedModel = null;
+    let embedProvider = provider;
     let quotaExhausted = false;
     const BATCH = 64;
     for (let i = 0; i < texts.length; i += BATCH) {
         const batch = texts.slice(i, i + BATCH);
         try {
-            const r = await embedBatch(batch, apiKey);
-            for (let j = 0; j < r.vectors.length; j += 1) out[i + j] = r.vectors[j];
+            const r = await embedBatch(batch, null);
+            for (let j = 0; j < (r.vectors || []).length; j += 1) out[i + j] = r.vectors[j];
             tokens += r.tokens;
+            embedMeta = embedMeta || r.meta || null;
+            embedModel = embedModel || r.model || null;
+            embedProvider = embedProvider || r.provider || null;
         } catch (e) {
             if (e.quota) {
-                logger.warn('Phase 0', 'Embedding stopped: OpenAI account is out of quota/credits. Keyword index is intact; add credits and run Build again to embed.');
+                logger.warn('Phase 0', 'Embedding stopped: Embedding provider is out of quota/credits. Keyword index is intact; add credits and run Build again to embed.');
                 quotaExhausted = true;
                 break;
             }
@@ -77,7 +83,7 @@ async function embedDocs(texts, { onProgress } = {}) {
         if (onProgress) onProgress({ phase: 'embed', done: Math.min(i + BATCH, texts.length), total: texts.length });
         await sleep(120); // gentle pacing to avoid rate limits
     }
-    return { vectors: out, tokens, quotaExhausted };
+    return { vectors: out, tokens, quotaExhausted, meta: embedMeta, model: embedModel, provider: embedProvider };
 }
 
 // Full(ish) build: sweep seed terms across all connected sources, dedupe, embed,
@@ -156,9 +162,9 @@ async function buildIndex({ seeds, onProgress } = {}) {
             if (onProgress) onProgress({ phase: 'embed', total: missing.length });
             const r = await embedDocs(missing.map((d) => d.text), { onProgress });
             quotaExhausted = !!r.quotaExhausted;
-            if (r.tokens) { try { require('../usage').record({ feature: 'index-embed', model: 'text-embedding-3-small', inTok: r.tokens, outTok: 0 }); } catch (_) { /* ignore */ } }
+            if (r.tokens) { try { require('../usage').record({ feature: 'index-embed', model: r.model || 'embedding', inTok: r.tokens, outTok: 0 }); } catch (_) { /* ignore */ } }
             if (r.vectors) {
-                const pairs = missing.map((d, i) => (r.vectors[i] ? { id: d.id, embedding: r.vectors[i] } : null)).filter(Boolean);
+                const pairs = missing.map((d, i) => (r.vectors[i] ? { id: d.id, embedding: r.vectors[i], embeddingMeta: r.meta || { provider: r.provider, model: r.model, dimensions: r.vectors[i].length } } : null)).filter(Boolean);
                 embedded = knowledge.applyEmbeddings(pairs);
             }
         }
@@ -185,10 +191,12 @@ async function saveLearning({ title, problem, content, note }) {
     if (!text.trim()) return { added: 0, error: 'nothing to save' };
 
     let embedding = null;
+    let embeddingMeta = null;
     try {
         const e = await embedDocs([text]);
         if (e.vectors) [embedding] = e.vectors;
-        if (e.tokens) { try { require('../usage').record({ feature: 'index-embed', model: 'text-embedding-3-small', inTok: e.tokens, outTok: 0 }); } catch (_) { /* ignore */ } }
+        embeddingMeta = e.meta || (embedding ? { provider: e.provider, model: e.model, dimensions: embedding.length } : null);
+        if (e.tokens) { try { require('../usage').record({ feature: 'index-embed', model: e.model || 'embedding', inTok: e.tokens, outTok: 0 }); } catch (_) { /* ignore */ } }
     } catch (_) { /* keyword-only */ }
 
     const doc = {
@@ -197,6 +205,7 @@ async function saveLearning({ title, problem, content, note }) {
         link: `learned://${Date.now().toString(36)}`,
         text,
         embedding,
+        embeddingMeta,
         boost: 2,
     };
     const added = knowledge.addDocuments([doc]);

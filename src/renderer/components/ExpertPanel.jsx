@@ -88,7 +88,7 @@ export default function ExpertPanel() {
                 else if (p.phase === 'servicenow-kb') setIndexProgress(`ServiceNow KB: ${p.count}…`);
                 else if (p.phase === 'web') setIndexProgress(`Docs site: ${p.count} pages…`);
                 else if (p.phase === 'embed') setIndexProgress(`embedding ${p.total} docs…`);
-                else if (p.phase === 'done') setIndexProgress(p.quotaExhausted ? `${p.count} docs · OpenAI quota exhausted — add credits, then Build again to embed` : `+${p.added} new (${p.count} total · ${p.withEmbeddings} embedded)`);
+                else if (p.phase === 'done') setIndexProgress(p.quotaExhausted ? `${p.count} docs - embedding provider quota exhausted - fix billing/quota, then Build again to embed` : `+${p.added} new (${p.count} total - ${p.withEmbeddings} embedded)`);
             });
             await loadIndexStats();
         } catch (e) {

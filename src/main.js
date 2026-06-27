@@ -612,17 +612,22 @@ ipcMain.handle('servicenow:analyzeCase', async (event, { requestId, url, webCont
     let ref = parseCaseRef(url);
 
     const snTokens = tokenStore.get('servicenow');
-    const baseUrl = (snTokens && snTokens.baseUrl) || process.env.SERVICENOW_BASE_URL;
-    if (!baseUrl) return { success: false, error: 'ServiceNow instance URL not set. Open Settings → ServiceNow URL first.' };
+    const baseUrl = (snTokens && snTokens.baseUrl)
+      || tokenStore.getSourceUrl('servicenow')
+      || process.env.SERVICENOW_BASE_URL
+      || sourceDefaults.servicenow?.baseUrl;
+    if (!baseUrl) return { success: false, error: 'ServiceNow instance URL not set. Open Settings -> ServiceNow URL first.' };
 
-    // Prefer the persistent SSO window (classic UI, has g_ck); fall back to the
-    // embedded webview's webContents — both share the ServiceNow session.
-    let win = sessionMod.getPersistentWindow('servicenow');
-    if (!win && webContentsId != null) {
+    // Prefer the embedded webview that is visibly showing the case. The older
+    // persistent SSO window can be stale/anonymous while the webview is logged
+    // in, which makes REST reads fail with HTTP 401 during Analyze Case.
+    let win = null;
+    if (webContentsId != null) {
       const { webContents } = require('electron');
       const wc = webContents.fromId(webContentsId);
       if (wc && !wc.isDestroyed()) win = { webContents: wc };
     }
+    if (!win) win = sessionMod.getPersistentWindow('servicenow');
     if (!win) {
       return { success: false, error: 'ServiceNow isn\'t connected. Open Settings → ServiceNow → Connect, then try again.' };
     }

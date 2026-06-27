@@ -167,15 +167,14 @@ async function execRecallKnowledge(args, ctx) {
     const query = String(args.query || '').trim();
     if (!query) return { error: 'empty query' };
     let qEmb = null;
+    let qMeta = null;
     try {
-        const key = tokenStore.getAiKey('openai');
-        if (key) {
-            const e = await require('../openai').embed([query], { apiKey: key });
-            qEmb = e.vectors[0];
-            if (ctx.usages && e.usage && e.usage.total_tokens) ctx.usages.push({ model: 'text-embedding-3-small', inTok: e.usage.total_tokens, outTok: 0 });
-        }
+        const e = await require('../embeddings').embed([query]);
+        qEmb = e.vectors?.[0] || null;
+        qMeta = e.meta || (qEmb ? { provider: e.provider, model: e.model, dimensions: qEmb.length } : null);
+        if (ctx.usages && e.usage && e.usage.total_tokens) ctx.usages.push({ model: e.model || 'embedding', inTok: e.usage.total_tokens, outTok: 0 });
     } catch (_) { /* keyword-only fallback */ }
-    const hits = knowledge.recall(query, qEmb, 8);
+    const hits = knowledge.recall(query, qEmb, 8, qMeta);
     if (!hits.length) {
         return { count: 0, note: 'Knowledge index is empty or had no match. Build/refresh it from the Ask AI Expert panel, or use search_sources for live data.' };
     }

@@ -353,9 +353,13 @@ async function embed(input, { apiKey, model = 'text-embedding-3-small', dimensio
         throw new Error(`OpenAI embeddings HTTP ${resp.status}: ${b.slice(0, 200)}`);
     }
     const data = await resp.json();
+    const vectors = (data.data || []).map((d) => d.embedding);
     return {
-        vectors: (data.data || []).map((d) => d.embedding),
+        vectors,
         usage: { total_tokens: data.usage ? data.usage.total_tokens : 0 },
+        model,
+        provider: 'openai',
+        dimensions: vectors.find(Array.isArray)?.length || dimensions || null,
     };
 }
 

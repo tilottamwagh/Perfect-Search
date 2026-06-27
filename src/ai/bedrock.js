@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { BedrockRuntimeClient, ConverseStreamCommand, ConverseCommand } = require('@aws-sdk/client-bedrock-runtime');
+const { BedrockRuntimeClient, ConverseStreamCommand, ConverseCommand, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
 const { NodeHttpHandler } = require('@smithy/node-http-handler');
 const { SYSTEM_PROMPT, CASE_ANALYSIS_SYSTEM_PROMPT, selectSources, buildUserMessage, buildCaseAnalysisText } = require('./prompt');
 const logger = require('../utils/logger');
@@ -389,8 +389,41 @@ async function expertChat({ messages, systemPrompt, apiKey, onChunk, model }) {
     return { text: fullText, usage: finalUsage, model: modelId, elapsedMs: Date.now() - startedAt };
 }
 
+// Text embeddings via AWS Bedrock. Titan v2 accepts one text per InvokeModel
+// call, so this preserves input order while batching at the caller level.
+async function embed(input, { apiKey, model = process.env.OMNISEARCH_BEDROCK_EMBED_MODEL || 'amazon.titan-embed-text-v2:0', dimensions = Number(process.env.OMNISEARCH_BEDROCK_EMBED_DIMENSIONS || 512) } = {}) {
+    const arr = Array.isArray(input) ? input : [input];
+    const region = isApiKey(apiKey) ? extractRegionFromApiKey(apiKey) : (parseCreds(apiKey)?.region || 'us-east-1');
+    const modelId = resolveModelId(model, region);
+    const client = makeClient(apiKey);
+    const vectors = [];
+    let tokens = 0;
+    for (const item of arr) {
+        const body = { inputText: String(item || '') };
+        if (dimensions) body.dimensions = dimensions;
+        body.normalize = true;
+        const cmd = new InvokeModelCommand({
+            modelId,
+            contentType: 'application/json',
+            accept: 'application/json',
+            body: Buffer.from(JSON.stringify(body)),
+        });
+        const resp = await client.send(cmd);
+        const payload = JSON.parse(Buffer.from(resp.body).toString('utf8'));
+        vectors.push(payload.embedding || payload.embeddings?.[0] || null);
+        tokens += Number(payload.inputTextTokenCount || payload.inputTokenCount || 0);
+    }
+    return {
+        vectors,
+        usage: { total_tokens: tokens },
+        model: modelId,
+        provider: 'bedrock',
+        dimensions: vectors.find(Array.isArray)?.length || dimensions || null,
+    };
+}
+
 module.exports = {
-    META, parseCreds, isApiKey, testKey, synthesize, synthesizeWithWeb, chat, analyzeCase, expertChat,
+    META, parseCreds, isApiKey, testKey, synthesize, synthesizeWithWeb, chat, analyzeCase, expertChat, embed,
     // Internal helpers exposed for the expert agent (which needs the same
     // multi-format auth + cross-region-profile resolution).
     _makeClient: makeClient,

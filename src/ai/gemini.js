@@ -495,4 +495,31 @@ async function expertChat({ messages, systemPrompt, apiKey, onChunk, model }) {
     return { text: fullText, usage: finalUsage, model: modelId, elapsedMs: Date.now() - startedAt };
 }
 
-module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat, analyzeCase, expertChat };
+async function embed(input, { apiKey, model = process.env.OMNISEARCH_GEMINI_EMBED_MODEL || 'text-embedding-004' } = {}) {
+    const arr = Array.isArray(input) ? input : [input];
+    const vectors = [];
+    let tokens = 0;
+    for (const item of arr) {
+        const resp = await fetch(gem(apiKey, model, 'embedContent'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: { parts: [{ text: String(item || '') }] } }),
+        });
+        if (!resp.ok) {
+            const errBody = await resp.text();
+            throw new Error('Gemini embeddings HTTP ' + resp.status + ': ' + errBody.substring(0, 200));
+        }
+        const data = await resp.json();
+        vectors.push(data?.embedding?.values || null);
+        tokens += Math.ceil(String(item || '').length / 4);
+    }
+    return {
+        vectors,
+        usage: { total_tokens: tokens },
+        model,
+        provider: 'gemini',
+        dimensions: vectors.find(Array.isArray)?.length || null,
+    };
+}
+
+module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat, analyzeCase, expertChat, embed };
