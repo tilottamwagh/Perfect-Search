@@ -315,17 +315,21 @@ function toBedrockMessages(convo) {
 }
 
 // Bedrock Converse streaming step — native AWS SDK, supports tool use.
+// Uses the shared bedrock adapter's makeClient/resolveModelId so it accepts
+// short-term keys (bedrock-api-key-…), long-term keys (ABSK… optionally
+// with |region suffix), AND IAM JSON — same auth the rest of the app uses.
 async function bedrockStreamStep({ apiKey, model, convo, tools, onChunk }) {
-    const { parseCreds } = require('../bedrock'); // reuse credential parser
-    const creds = parseCreds(apiKey);
-    if (!creds) throw new Error('Invalid AWS credentials JSON');
-    const client = new BedrockRuntimeClient({
-        region: creds.region || 'us-east-1',
-        credentials: { accessKeyId: creds.accessKeyId, secretAccessKey: creds.secretAccessKey, ...(creds.sessionToken ? { sessionToken: creds.sessionToken } : {}) },
-    });
+    const bedrockAdapter = require('../bedrock');
+    const client = bedrockAdapter._makeClient
+        ? bedrockAdapter._makeClient(apiKey)
+        : (() => { throw new Error('Bedrock adapter missing makeClient export'); })();
+    const region = bedrockAdapter.isApiKey(apiKey)
+        ? bedrockAdapter._extractRegion(apiKey)
+        : (bedrockAdapter.parseCreds(apiKey)?.region || 'us-east-1');
+    const modelId = bedrockAdapter._resolveModelId(model, region);
     const { system, messages } = toBedrockMessages(convo);
     const cmd = new ConverseStreamCommand({
-        modelId: model,
+        modelId,
         system,
         messages,
         inferenceConfig: { maxTokens: 4096, temperature: 0.3 },

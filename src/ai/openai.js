@@ -43,10 +43,9 @@ const META = {
     pricing: 'paid · varies per model, see platform.openai.com/docs/pricing',
     defaultModel: DEFAULT_MODEL,
     models: MODELS,
-    // OpenAI's chat-completions endpoint doesn't bundle web search server-side.
-    // The Assistants API offers it but it's a separate flow — out of scope for
-    // the BYOK quick path. Web mode for OpenAI users surfaces a friendly note.
-    supportsWeb: false,
+    // OpenAI chat-completions has no native web search, but we plug in the
+    // shared DuckDuckGo fallback in webSearch.js so Web Research still works.
+    supportsWeb: true,
 };
 
 async function testKey(apiKey) {
@@ -299,10 +298,13 @@ async function expertChat({ messages, systemPrompt, apiKey, onChunk, model }) {
     };
 }
 
-// OpenAI chat-completions has no server-hosted web search. Return a clear
-// "not supported" so the UI can surface a helpful message rather than failing.
-async function synthesizeWithWeb() {
-    throw new Error('WEB_NOT_SUPPORTED: OpenAI chat-completions does not include web search. Switch to Anthropic Claude or Google Gemini in Settings to use Web Research.');
+// OpenAI chat-completions has no server-hosted web search, so we use the
+// shared DuckDuckGo + page-scrape fallback in webSearch.js. The synthesis is
+// done via this adapter's chat() helper so the user's chosen GPT model is
+// what writes the answer.
+async function synthesizeWithWeb({ query, apiKey, onChunk, model }) {
+    const { webResearch } = require('./webSearch');
+    return webResearch({ adapter: module.exports, query, apiKey, model: model || DEFAULT_MODEL, onChunk });
 }
 
 // Lightweight non-streaming chat helper for the agent's intent classifier.

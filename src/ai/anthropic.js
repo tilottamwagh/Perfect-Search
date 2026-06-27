@@ -1,6 +1,6 @@
 require('dotenv').config();
 const Anthropic = require('@anthropic-ai/sdk');
-const { SYSTEM_PROMPT, selectSources, buildUserMessage } = require('./prompt');
+const { SYSTEM_PROMPT, CASE_ANALYSIS_SYSTEM_PROMPT, selectSources, buildUserMessage, buildCaseAnalysisText } = require('./prompt');
 const logger = require('../utils/logger');
 
 const DEFAULT_MODEL = process.env.OMNISEARCH_ANTHROPIC_MODEL || 'claude-opus-4-7';
@@ -167,4 +167,86 @@ async function chat(systemPrompt, userPrompt, { apiKey, model, maxTokens = 256 }
     return (resp.content || []).find((b) => b.type === 'text')?.text || '';
 }
 
-module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat };
+// ServiceNow case analysis. Claude supports vision via base64 image blocks,
+// so screenshots are sent inline alongside the case text.
+async function analyzeCase({ caseBundle, kbResults, apiKey, onChunk, model }) {
+    const client = new Anthropic({ apiKey });
+    const modelId = model || DEFAULT_MODEL;
+    const text = buildCaseAnalysisText(caseBundle, kbResults);
+    const images = Array.isArray(caseBundle?.images) ? caseBundle.images : [];
+
+    const userContent = [{ type: 'text', text }];
+    for (const img of images) {
+        const mime = img.contentType || 'image/png';
+        userContent.push({
+            type: 'image',
+            source: { type: 'base64', media_type: mime, data: img.base64 },
+        });
+    }
+
+    logger.info('Phase 7', `[anthropic:${modelId}] analyzeCase prompt=${text.length} chars, images=${images.length}, kb=${(kbResults || []).length}`);
+    const startedAt = Date.now();
+
+    let fullText = '';
+    const stream = await client.messages.stream({
+        model: modelId,
+        max_tokens: 4096,
+        system: [{ type: 'text', text: CASE_ANALYSIS_SYSTEM_PROMPT }],
+        messages: [{ role: 'user', content: userContent }],
+    });
+    stream.on('text', (delta) => {
+        fullText += delta;
+        if (onChunk) try { onChunk(delta); } catch (_) {}
+    });
+
+    const finalMessage = await stream.finalMessage();
+    const usage = finalMessage.usage;
+    const elapsed = Date.now() - startedAt;
+    logger.success('Phase 7', `[anthropic:${modelId}] analyzeCase done in ${elapsed}ms · in=${usage?.input_tokens} out=${usage?.output_tokens}`);
+    return { text: fullText, usage, model: modelId, elapsedMs: elapsed };
+}
+
+// Multi-turn streaming chat for "Ask AI Expert". Accepts an array of
+// {role, content} messages where content may be a string or an array of
+// content blocks ({type:'text'|'image', ...}).
+async function expertChat({ messages, systemPrompt, apiKey, onChunk, model }) {
+    const client = new Anthropic({ apiKey });
+    const modelId = model || DEFAULT_MODEL;
+    const startedAt = Date.now();
+
+    // Anthropic requires alternating user/assistant turns. Translate any
+    // OpenAI-shaped image_url parts into Anthropic's image source format so
+    // the same UI message history works across providers.
+    const normalizedMessages = (messages || []).map((m) => {
+        if (typeof m.content === 'string') return { role: m.role, content: m.content };
+        const blocks = (m.content || []).map((b) => {
+            if (b.type === 'text') return { type: 'text', text: b.text };
+            if (b.type === 'image_url' && b.image_url?.url?.startsWith('data:')) {
+                const [meta, data] = b.image_url.url.split(',');
+                const mime = (meta.match(/data:([^;]+)/) || [null, 'image/png'])[1];
+                return { type: 'image', source: { type: 'base64', media_type: mime, data } };
+            }
+            if (b.type === 'image' && b.source) return b;
+            return null;
+        }).filter(Boolean);
+        return { role: m.role, content: blocks };
+    });
+
+    let fullText = '';
+    const stream = await client.messages.stream({
+        model: modelId,
+        max_tokens: 4096,
+        system: [{ type: 'text', text: systemPrompt || 'You are a helpful assistant.' }],
+        messages: normalizedMessages,
+    });
+    stream.on('text', (delta) => {
+        fullText += delta;
+        if (onChunk) try { onChunk(delta); } catch (_) {}
+    });
+
+    const finalMessage = await stream.finalMessage();
+    const usage = finalMessage.usage;
+    return { text: fullText, usage, model: modelId, elapsedMs: Date.now() - startedAt };
+}
+
+module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat, analyzeCase, expertChat };

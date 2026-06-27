@@ -29,7 +29,8 @@ const META = {
     pricing: 'paid · very cheap per-token',
     defaultModel: DEFAULT_MODEL,
     models: MODELS,
-    supportsWeb: false,
+    // No native web search, but shared DuckDuckGo fallback in webSearch.js.
+    supportsWeb: true,
 };
 
 async function testKey(apiKey, model) {
@@ -143,8 +144,10 @@ async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt
     return { text: fullText, picked, usage: finalUsage, model: modelId, elapsedMs: elapsed };
 }
 
-async function synthesizeWithWeb() {
-    throw new Error('WEB_NOT_SUPPORTED: DeepSeek does not expose a web-search tool. Switch to Anthropic Claude or Google Gemini in Settings to use Web Research.');
+// DeepSeek has no native web search — use the shared DuckDuckGo fallback.
+async function synthesizeWithWeb({ query, apiKey, onChunk, model }) {
+    const { webResearch } = require('./webSearch');
+    return webResearch({ adapter: module.exports, query, apiKey, model: model || DEFAULT_MODEL, onChunk });
 }
 
 // Non-streaming chat helper for the agent's intent classifier.
@@ -231,4 +234,57 @@ async function analyzeCase({ caseBundle, kbResults, apiKey, onChunk, model }) {
     return { text: fullText, usage: finalUsage, model: modelId, elapsedMs: elapsed };
 }
 
-module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat, analyzeCase };
+// Multi-turn streaming chat for "Ask AI Expert". DeepSeek's chat-completions
+// is OpenAI-compatible; image_url parts are dropped since DeepSeek is
+// text-only — a marker line is appended so the model knows screenshots existed.
+async function expertChat({ messages, systemPrompt, apiKey, onChunk, model }) {
+    const modelId = model || DEFAULT_MODEL;
+    const normalized = (messages || []).map((m) => {
+        if (typeof m.content === 'string') return { role: m.role, content: m.content };
+        const textParts = (m.content || []).filter((b) => b.type === 'text').map((b) => b.text);
+        const imageCount = (m.content || []).filter((b) => b.type === 'image_url').length;
+        let joined = textParts.join('\n');
+        if (imageCount > 0) joined += `\n\n(${imageCount} image(s) attached — DeepSeek is text-only; describe them in text if needed.)`;
+        return { role: m.role, content: joined };
+    });
+
+    const startedAt = Date.now();
+    const resp = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({
+            model: modelId,
+            stream: true,
+            stream_options: { include_usage: true },
+            max_tokens: 4096,
+            temperature: 0.4,
+            messages: [
+                { role: 'system', content: systemPrompt || 'You are a helpful assistant.' },
+                ...normalized,
+            ],
+        }),
+    });
+    if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`DeepSeek HTTP ${resp.status}: ${errBody.substring(0, 400)}`);
+    }
+
+    let fullText = '';
+    let usage = null;
+    for await (const chunk of sseLines(resp)) {
+        const delta = chunk?.choices?.[0]?.delta?.content;
+        if (typeof delta === 'string' && delta.length > 0) {
+            fullText += delta;
+            if (onChunk) try { onChunk(delta); } catch (_) {}
+        }
+        if (chunk?.usage) usage = chunk.usage;
+    }
+    return {
+        text: fullText,
+        usage: usage ? { input_tokens: usage.prompt_tokens, output_tokens: usage.completion_tokens, total_tokens: usage.total_tokens } : null,
+        model: modelId,
+        elapsedMs: Date.now() - startedAt,
+    };
+}
+
+module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat, analyzeCase, expertChat };

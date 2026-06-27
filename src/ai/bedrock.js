@@ -62,7 +62,8 @@ const META = {
     pricing: 'pay-per-token · varies by model',
     defaultModel: DEFAULT_MODEL,
     models: MODELS,
-    supportsWeb: false,
+    // No native web search on Bedrock, but shared DuckDuckGo fallback works.
+    supportsWeb: true,
     credentialFormat: 'aws-bedrock',
 };
 
@@ -260,8 +261,10 @@ async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt
     return { text: fullText, picked, usage: finalUsage, model: modelId, elapsedMs: elapsed };
 }
 
-async function synthesizeWithWeb() {
-    throw new Error('WEB_NOT_SUPPORTED: AWS Bedrock does not expose a web-search tool. Switch to Anthropic Claude or Google Gemini in Settings to use Web Research.');
+// Bedrock has no native web search — use the shared DuckDuckGo fallback.
+async function synthesizeWithWeb({ query, apiKey, onChunk, model }) {
+    const { webResearch } = require('./webSearch');
+    return webResearch({ adapter: module.exports, query, apiKey, model: model || DEFAULT_MODEL, onChunk });
 }
 
 // ─── chat (non-streaming, for intent/query extraction) ───────────────────────
@@ -328,4 +331,62 @@ async function analyzeCase({ caseBundle, kbResults, apiKey, onChunk, model }) {
     return { text: fullText, usage: finalUsage, model: modelId, elapsedMs: elapsed };
 }
 
-module.exports = { META, parseCreds, isApiKey, testKey, synthesize, synthesizeWithWeb, chat, analyzeCase };
+// Multi-turn streaming chat for "Ask AI Expert" using Bedrock's Converse API.
+// The Converse format is { role, content: [{text} | {image:{format,source:{bytes}}}] }
+// — we translate from the unified OpenAI-shaped UI message history.
+async function expertChat({ messages, systemPrompt, apiKey, onChunk, model }) {
+    const region = isApiKey(apiKey) ? extractRegionFromApiKey(apiKey) : (parseCreds(apiKey)?.region || 'us-east-1');
+    const modelId = resolveModelId(model || DEFAULT_MODEL, region);
+    const client = makeClient(apiKey);
+
+    const converseMessages = (messages || []).map((m) => {
+        if (typeof m.content === 'string') {
+            return { role: m.role, content: [{ text: m.content }] };
+        }
+        const blocks = (m.content || []).map((b) => {
+            if (b.type === 'text') return { text: b.text };
+            if (b.type === 'image_url' && b.image_url?.url?.startsWith('data:')) {
+                const [meta, data] = b.image_url.url.split(',');
+                const mime = (meta.match(/data:([^;]+)/) || [null, 'image/png'])[1];
+                const format = mime.split('/')[1] || 'png';
+                return { image: { format, source: { bytes: Buffer.from(data, 'base64') } } };
+            }
+            return null;
+        }).filter(Boolean);
+        return { role: m.role, content: blocks };
+    });
+
+    const cmd = new ConverseStreamCommand({
+        modelId,
+        system: [{ text: systemPrompt || 'You are a helpful assistant.' }],
+        messages: converseMessages,
+        inferenceConfig: { maxTokens: 4096, temperature: 0.4 },
+    });
+
+    const startedAt = Date.now();
+    let resp;
+    try { resp = await client.send(cmd); } catch (err) { translateBedrockError(err); }
+    let fullText = '';
+    let usage = null;
+    for await (const event of resp.stream) {
+        if (event.contentBlockDelta?.delta?.text) {
+            const delta = event.contentBlockDelta.delta.text;
+            fullText += delta;
+            if (onChunk) try { onChunk(delta); } catch (_) {}
+        }
+        if (event.metadata?.usage) usage = event.metadata.usage;
+    }
+    const finalUsage = usage
+        ? { input_tokens: usage.inputTokens || 0, output_tokens: usage.outputTokens || 0, total_tokens: (usage.inputTokens || 0) + (usage.outputTokens || 0) }
+        : null;
+    return { text: fullText, usage: finalUsage, model: modelId, elapsedMs: Date.now() - startedAt };
+}
+
+module.exports = {
+    META, parseCreds, isApiKey, testKey, synthesize, synthesizeWithWeb, chat, analyzeCase, expertChat,
+    // Internal helpers exposed for the expert agent (which needs the same
+    // multi-format auth + cross-region-profile resolution).
+    _makeClient: makeClient,
+    _resolveModelId: resolveModelId,
+    _extractRegion: extractRegionFromApiKey,
+};

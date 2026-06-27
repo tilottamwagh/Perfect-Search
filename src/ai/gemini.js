@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { SYSTEM_PROMPT, selectSources, buildUserMessage } = require('./prompt');
+const { SYSTEM_PROMPT, CASE_ANALYSIS_SYSTEM_PROMPT, selectSources, buildUserMessage, buildCaseAnalysisText } = require('./prompt');
 const logger = require('../utils/logger');
 
 // `gemini-2.5-flash` is the current default — fast, free tier, and supports
@@ -383,4 +383,116 @@ async function chat(systemPrompt, userPrompt, { apiKey, model, maxTokens = 256 }
     return parts.map((p) => (typeof p?.text === 'string' ? p.text : '')).join('').trim();
 }
 
-module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat };
+// ServiceNow case analysis. Gemini supports vision via inlineData parts.
+async function analyzeCase({ caseBundle, kbResults, apiKey, onChunk, model }) {
+    const modelId = model || DEFAULT_MODEL;
+    const text = buildCaseAnalysisText(caseBundle, kbResults);
+    const images = Array.isArray(caseBundle?.images) ? caseBundle.images : [];
+
+    const parts = [{ text }];
+    for (const img of images) {
+        parts.push({ inlineData: { mimeType: img.contentType || 'image/png', data: img.base64 } });
+    }
+
+    logger.info('Phase 7', `[gemini:${modelId}] analyzeCase prompt=${text.length} chars, images=${images.length}, kb=${(kbResults || []).length}`);
+    const startedAt = Date.now();
+
+    const body = {
+        systemInstruction: { role: 'system', parts: [{ text: CASE_ANALYSIS_SYSTEM_PROMPT }] },
+        contents: [{ role: 'user', parts }],
+        generationConfig: { maxOutputTokens: 4096, temperature: 0.3 },
+        safetySettings: SAFETY_SETTINGS,
+    };
+
+    const resp = await fetch(gem(apiKey, modelId, 'streamGenerateContent'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`Gemini HTTP ${resp.status}: ${errBody.substring(0, 400)}`);
+    }
+
+    let fullText = '';
+    let usage = null;
+    for await (const chunk of sseLines(resp)) {
+        const cand = chunk?.candidates?.[0];
+        const ps = cand?.content?.parts || [];
+        for (const p of ps) {
+            if (p?.thought) continue;
+            if (typeof p?.text === 'string' && p.text.length > 0) {
+                fullText += p.text;
+                if (onChunk) try { onChunk(p.text); } catch (_) {}
+            }
+        }
+        if (chunk?.usageMetadata) usage = chunk.usageMetadata;
+    }
+
+    const elapsed = Date.now() - startedAt;
+    const finalUsage = usage
+        ? { input_tokens: usage.promptTokenCount || 0, output_tokens: usage.candidatesTokenCount || 0, total_tokens: usage.totalTokenCount || 0 }
+        : null;
+    logger.success('Phase 7', `[gemini:${modelId}] analyzeCase done in ${elapsed}ms · in=${finalUsage?.input_tokens} out=${finalUsage?.output_tokens}`);
+    return { text: fullText, usage: finalUsage, model: modelId, elapsedMs: elapsed };
+}
+
+// Multi-turn streaming chat for "Ask AI Expert".
+async function expertChat({ messages, systemPrompt, apiKey, onChunk, model }) {
+    const modelId = model || DEFAULT_MODEL;
+    // Map roles: Gemini uses 'user' and 'model' (not 'assistant').
+    const contents = (messages || []).map((m) => {
+        const role = m.role === 'assistant' ? 'model' : (m.role === 'system' ? 'user' : m.role);
+        const partsArr = typeof m.content === 'string'
+            ? [{ text: m.content }]
+            : (m.content || []).map((b) => {
+                if (b.type === 'text') return { text: b.text };
+                if (b.type === 'image_url' && b.image_url?.url?.startsWith('data:')) {
+                    const [meta, data] = b.image_url.url.split(',');
+                    const mime = (meta.match(/data:([^;]+)/) || [null, 'image/png'])[1];
+                    return { inlineData: { mimeType: mime, data } };
+                }
+                return null;
+            }).filter(Boolean);
+        return { role, parts: partsArr };
+    });
+
+    const body = {
+        systemInstruction: { role: 'system', parts: [{ text: systemPrompt || 'You are a helpful assistant.' }] },
+        contents,
+        generationConfig: { maxOutputTokens: 4096, temperature: 0.4 },
+        safetySettings: SAFETY_SETTINGS,
+    };
+
+    const startedAt = Date.now();
+    const resp = await fetch(gem(apiKey, modelId, 'streamGenerateContent'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`Gemini HTTP ${resp.status}: ${errBody.substring(0, 400)}`);
+    }
+
+    let fullText = '';
+    let usage = null;
+    for await (const chunk of sseLines(resp)) {
+        const cand = chunk?.candidates?.[0];
+        const ps = cand?.content?.parts || [];
+        for (const p of ps) {
+            if (p?.thought) continue;
+            if (typeof p?.text === 'string' && p.text.length > 0) {
+                fullText += p.text;
+                if (onChunk) try { onChunk(p.text); } catch (_) {}
+            }
+        }
+        if (chunk?.usageMetadata) usage = chunk.usageMetadata;
+    }
+    const finalUsage = usage
+        ? { input_tokens: usage.promptTokenCount || 0, output_tokens: usage.candidatesTokenCount || 0, total_tokens: usage.totalTokenCount || 0 }
+        : null;
+    return { text: fullText, usage: finalUsage, model: modelId, elapsedMs: Date.now() - startedAt };
+}
+
+module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat, analyzeCase, expertChat };

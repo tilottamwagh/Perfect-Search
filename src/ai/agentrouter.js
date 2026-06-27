@@ -1,6 +1,6 @@
 require('dotenv').config();
 const { net } = require('electron');
-const { SYSTEM_PROMPT, selectSources, buildUserMessage } = require('./prompt');
+const { SYSTEM_PROMPT, CASE_ANALYSIS_SYSTEM_PROMPT, selectSources, buildUserMessage, buildCaseAnalysisText } = require('./prompt');
 const logger = require('../utils/logger');
 
 // Agent Router's anti-bot middleware does TLS fingerprinting (JA3/JA4). The
@@ -59,10 +59,8 @@ const META = {
     pricing: 'paid · per-model, see agentrouter.org/pricing',
     defaultModel: DEFAULT_MODEL,
     models: MODELS,
-    // Agent Router's OpenAI-compatible endpoint doesn't expose a web-search
-    // tool, even on its Anthropic-routed models. Web Research will surface
-    // the same friendly notice as OpenAI does.
-    supportsWeb: false,
+    // No native web search, but shared DuckDuckGo fallback in webSearch.js.
+    supportsWeb: true,
 };
 
 async function testKey(apiKey) {
@@ -191,8 +189,10 @@ async function synthesize({ query, results, apiKey, onChunk, model, systemPrompt
     };
 }
 
-async function synthesizeWithWeb() {
-    throw new Error('WEB_NOT_SUPPORTED: Agent Router\'s OpenAI-compatible endpoint does not expose a web-search tool. Switch to Anthropic Claude or Google Gemini in Settings to use Web Research.');
+// Agent Router has no native web search — use the shared DuckDuckGo fallback.
+async function synthesizeWithWeb({ query, apiKey, onChunk, model }) {
+    const { webResearch } = require('./webSearch');
+    return webResearch({ adapter: module.exports, query, apiKey, model: model || DEFAULT_MODEL, onChunk });
 }
 
 // Lightweight non-streaming chat helper for the agent's intent classifier.
@@ -226,4 +226,113 @@ async function chat(systemPrompt, userPrompt, { apiKey, model, maxTokens = 256 }
     return data?.choices?.[0]?.message?.content || '';
 }
 
-module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat };
+// ServiceNow case analysis. AgentRouter is OpenAI-compatible but its upstream
+// routing varies per model, so we play it safe and analyze text-only with a
+// note that screenshots were skipped.
+async function analyzeCase({ caseBundle, kbResults, apiKey, onChunk, model }) {
+    const modelId = model || DEFAULT_MODEL;
+    let text = buildCaseAnalysisText(caseBundle, kbResults);
+    const imageCount = Array.isArray(caseBundle?.images) ? caseBundle.images.length : 0;
+    if (imageCount > 0) {
+        text += `\n\n(NOTE: ${imageCount} screenshot(s) attached — image analysis depends on the upstream model. Switch to OpenAI / Anthropic / Gemini / Bedrock for guaranteed vision.)`;
+    }
+
+    logger.info('Phase 7', `[agentrouter:${modelId}] analyzeCase prompt=${text.length} chars, images=${imageCount} (text-only), kb=${(kbResults || []).length}`);
+    const startedAt = Date.now();
+
+    const resp = await chromiumFetch(API_URL, {
+        method: 'POST',
+        headers: { ...BROWSER_HEADERS, 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({
+            model: modelId,
+            stream: true,
+            stream_options: { include_usage: true },
+            max_tokens: 4096,
+            temperature: 0.3,
+            messages: [
+                { role: 'system', content: CASE_ANALYSIS_SYSTEM_PROMPT },
+                { role: 'user', content: text },
+            ],
+        }),
+    });
+    if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`Agent Router HTTP ${resp.status}: ${errBody.substring(0, 400)}`);
+    }
+
+    let fullText = '';
+    let usage = null;
+    for await (const chunk of sseLines(resp)) {
+        const delta = chunk?.choices?.[0]?.delta?.content;
+        if (typeof delta === 'string' && delta.length > 0) {
+            fullText += delta;
+            if (onChunk) try { onChunk(delta); } catch (_) {}
+        }
+        if (chunk?.usage) usage = chunk.usage;
+    }
+
+    const elapsed = Date.now() - startedAt;
+    let finalUsage;
+    if (usage && (usage.prompt_tokens || usage.completion_tokens)) {
+        finalUsage = { input_tokens: usage.prompt_tokens, output_tokens: usage.completion_tokens, total_tokens: usage.total_tokens };
+    } else {
+        const inEst = Math.ceil(text.length / 4);
+        const outEst = Math.ceil(fullText.length / 4);
+        finalUsage = { input_tokens: inEst, output_tokens: outEst, total_tokens: inEst + outEst, estimated: true };
+    }
+    logger.success('Phase 7', `[agentrouter:${modelId}] analyzeCase done in ${elapsed}ms · in=${finalUsage.input_tokens} out=${finalUsage.output_tokens}`);
+    return { text: fullText, usage: finalUsage, model: modelId, elapsedMs: elapsed };
+}
+
+// Multi-turn streaming chat for "Ask AI Expert".
+async function expertChat({ messages, systemPrompt, apiKey, onChunk, model }) {
+    const modelId = model || DEFAULT_MODEL;
+    const normalized = (messages || []).map((m) => {
+        if (typeof m.content === 'string') return { role: m.role, content: m.content };
+        const textParts = (m.content || []).filter((b) => b.type === 'text').map((b) => b.text);
+        const imageCount = (m.content || []).filter((b) => b.type === 'image_url').length;
+        let joined = textParts.join('\n');
+        if (imageCount > 0) joined += `\n\n(${imageCount} image(s) attached — Agent Router upstream support for vision varies.)`;
+        return { role: m.role, content: joined };
+    });
+
+    const startedAt = Date.now();
+    const resp = await chromiumFetch(API_URL, {
+        method: 'POST',
+        headers: { ...BROWSER_HEADERS, 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({
+            model: modelId,
+            stream: true,
+            stream_options: { include_usage: true },
+            max_tokens: 4096,
+            temperature: 0.4,
+            messages: [
+                { role: 'system', content: systemPrompt || 'You are a helpful assistant.' },
+                ...normalized,
+            ],
+        }),
+    });
+    if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`Agent Router HTTP ${resp.status}: ${errBody.substring(0, 400)}`);
+    }
+
+    let fullText = '';
+    let usage = null;
+    for await (const chunk of sseLines(resp)) {
+        const delta = chunk?.choices?.[0]?.delta?.content;
+        if (typeof delta === 'string' && delta.length > 0) {
+            fullText += delta;
+            if (onChunk) try { onChunk(delta); } catch (_) {}
+        }
+        if (chunk?.usage) usage = chunk.usage;
+    }
+    return {
+        text: fullText,
+        usage: usage ? { input_tokens: usage.prompt_tokens, output_tokens: usage.completion_tokens, total_tokens: usage.total_tokens } : null,
+        model: modelId,
+        elapsedMs: Date.now() - startedAt,
+    };
+}
+
+module.exports = { META, testKey, synthesize, synthesizeWithWeb, chat, analyzeCase, expertChat };
